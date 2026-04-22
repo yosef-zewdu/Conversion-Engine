@@ -1,0 +1,6 @@
+# Conversion Engine — local dev services
+#
+# Cal.com: using cloud API (https://cal.com) — no local container needed.
+#   CAL_API_KEY and CAL_BASE_URL=https://api.cal.com are set in .env
+#
+# Add any future local services (e.g. Redis, local LLM proxy) here.

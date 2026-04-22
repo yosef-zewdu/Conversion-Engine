@@ -1,0 +1,18 @@
+[project]
+name = "conversion-engine"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.136.0",
+    "httpx>=0.28.0",
+    "hypothesis>=6.152.1",
+    "langfuse>=4.5.0",
+    "playwright>=1.58.0",
+    "pydantic>=2.13.3",
+    "pytest>=9.0.3",
+    "python-dotenv>=1.2.2",
+    "resend>=2.10.0",
+    "uvicorn>=0.44.0",
+]
