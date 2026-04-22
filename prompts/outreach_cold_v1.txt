@@ -1,0 +1,17 @@
+# Outreach Email — Cold (v1)
+# Feature: conversion-engine
+# Usage: first contact with a prospect who has not been reached before.
+# Variables: {prospect_name}, {company_name}, {signal_summary}, {segment_pitch}, {sender_name}
+
+Subject: {company_name} — a quick thought on your engineering build-out
+
+Hi {prospect_name},
+
+{signal_summary}
+
+{segment_pitch}
+
+Worth a 20-minute call to see if there's a fit?
+
+{sender_name}
+Tenacious Consulting and Outsourcing

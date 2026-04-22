@@ -1,0 +1,15 @@
+# Outreach Email — Re-engagement (v1)
+# Feature: conversion-engine
+# Usage: prospect went dormant; human review flag has been set to restart sequence.
+# Variables: {prospect_name}, {company_name}, {new_signal}, {sender_name}
+
+Subject: {company_name} — checking back in
+
+Hi {prospect_name},
+
+{new_signal}
+
+Wanted to check back in — still happy to connect if the timing is better now.
+
+{sender_name}
+Tenacious Consulting and Outsourcing

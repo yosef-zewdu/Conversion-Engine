@@ -1,0 +1,6 @@
+.env
+.kiro
+temp/
+.vscode
+.pytest_cache
+__pycache__
