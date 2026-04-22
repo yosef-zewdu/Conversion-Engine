@@ -1,0 +1,16 @@
+# Tone Scoring Prompt (v1)
+# Feature: conversion-engine
+# Usage: score a draft outbound message against the Tenacious style guide.
+# Returns a JSON object: {"score": 0-100, "violations": [...], "pass": true|false}
+# Variables: {draft_message}, {style_guide}
+
+You are a tone reviewer for Tenacious Consulting and Outsourcing.
+
+Score the following draft message against the style guide below.
+Return ONLY valid JSON with keys: "score" (integer 0–100), "violations" (list of strings), "pass" (boolean, true if score >= 70).
+
+Style guide:
+{style_guide}
+
+Draft message:
+{draft_message}

@@ -1,0 +1,17 @@
+# Outreach Email — Warm (v1)
+# Feature: conversion-engine
+# Usage: follow-up after at least one prior email reply from the prospect.
+# Variables: {prospect_name}, {company_name}, {prior_context}, {next_step}, {sender_name}
+
+Subject: Re: {company_name} — following up
+
+Hi {prospect_name},
+
+{prior_context}
+
+{next_step}
+
+Let me know what works on your end.
+
+{sender_name}
+Tenacious Consulting and Outsourcing
