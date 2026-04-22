@@ -1,0 +1,10 @@
+{
+  "version": "2026-04-22T00:00:00Z",
+  "available_engineers": {
+    "python": 4,
+    "go": 2,
+    "data": 3,
+    "ml": 2,
+    "infra": 1
+  }
+}
