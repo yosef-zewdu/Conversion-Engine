@@ -256,7 +256,7 @@ class TestLogActivityIntegration:
 
         assert eng_id == "eng-out-001"
         payload = captured[0]
-        assert payload["engagement"]["type"] == "EMAIL"
+        assert payload["engagement"]["type"] == "NOTE"
         assert payload["metadata"]["channel"] == "email"
         assert payload["metadata"]["direction"] == "outbound"
         assert payload["metadata"]["prospect_id"] == "integ-p-001"
@@ -290,7 +290,7 @@ class TestLogActivityIntegration:
 
         assert eng_id == "eng-in-001"
         payload = captured[0]
-        assert payload["engagement"]["type"] == "EMAIL"
+        assert payload["engagement"]["type"] == "NOTE"
         assert payload["metadata"]["direction"] == "inbound"
 
     def test_log_outbound_sms_activity(self) -> None:

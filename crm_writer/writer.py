@@ -488,8 +488,8 @@ def _map_activity_type(activity_type: str) -> str:
         HubSpot engagement type string (e.g. ``"EMAIL"``).
     """
     mapping = {
-        "outbound_email": "EMAIL",
-        "inbound_email": "EMAIL",
+        "outbound_email": "NOTE",
+        "inbound_email": "NOTE",
         "outbound_sms": "NOTE",
         "inbound_sms": "NOTE",
         "outbound_voice": "CALL",

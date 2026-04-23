@@ -116,7 +116,7 @@ class TestHelpers:
         assert before <= ms <= after
 
     def test_map_activity_type_known(self) -> None:
-        assert _map_activity_type("outbound_email") == "EMAIL"
+        assert _map_activity_type("outbound_email") == "NOTE"
         assert _map_activity_type("outbound_voice") == "CALL"
         assert _map_activity_type("outbound_sms") == "NOTE"
 
@@ -277,7 +277,7 @@ class TestCRMWriterLogActivity:
                 })
             )
 
-        assert captured[0]["engagement"]["type"] == "EMAIL"
+        assert captured[0]["engagement"]["type"] == "NOTE"
 
 
 class TestCRMWriterWriteBrief:

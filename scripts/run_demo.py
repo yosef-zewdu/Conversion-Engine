@@ -156,7 +156,7 @@ async def run(email: str, phone: str, name: str) -> None:
         "prospect_id": prospect.prospect_id,
         "channel": outbound.channel,
         "timestamp": outbound.sent_at,
-        "content": outbound.content,
+        "content": f"Subject: {outbound.subject or '(no subject)'}\n\n{outbound.content}",
         "direction": "outbound",
         "draft": True,
     }, hs_contact_id=contact_id)
