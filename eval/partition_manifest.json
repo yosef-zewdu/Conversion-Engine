@@ -1,0 +1,17 @@
+{
+  "created_at": "2026-04-22",
+  "domain": "retail",
+  "model_pinned": "openrouter/qwen/qwen3-235b-a22b",
+  "seed": 42,
+  "num_trials": 5,
+  "dev_slice": [
+    "0", "1", "2", "3", "4", "6", "7", "8", "10", "11",
+    "13", "14", "15", "16", "19", "20", "21", "22", "23", "24",
+    "25", "28", "29", "30", "31", "34", "35", "37", "41", "43"
+  ],
+  "held_out_slice": [
+    "5", "9", "12", "17", "18", "26", "27", "32", "33", "36",
+    "38", "39", "40", "42", "45", "49", "51", "53", "55", "56"
+  ],
+  "note": "Held-out task IDs sealed on 2026-04-22 before any mechanism work. Dev work uses only dev_slice IDs. Held-out used only in Act IV ablation."
+}

@@ -4,3 +4,5 @@ temp/
 .vscode
 .pytest_cache
 __pycache__
+.hypothesis
+data/tenacious_sales_data
