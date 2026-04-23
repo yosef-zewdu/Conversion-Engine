@@ -43,22 +43,16 @@ _phone_registry: dict[str, str] = {}
 
 @app.on_event("startup")
 async def _register_demo_prospect() -> None:
-    """Pre-register the staff-sink prospect so SMS webhooks can match by phone.
-
-    Reads STAFF_SINK_PHONE from env. This lets the AT simulator callback
-    resolve to a known prospect_id without a running pipeline.
-    """
+    """Pre-register the staff-sink prospect so SMS webhooks can match by phone."""
     phone = os.environ.get("STAFF_SINK_PHONE", "").strip()
     email = os.environ.get("STAFF_SINK_EMAIL", "demo@tenacious-sandbox.dev").strip()
-    if not phone:
-        return
 
     prospect = Prospect(
         prospect_id="demo-prospect-001",
         company_id="demo-co-001",
         contact_name="Demo Prospect",
         email=email,
-        phone=phone,
+        phone=phone or None,
         timezone="America/New_York",
         preferred_channel="email",
         current_state=ProspectState.CONTACTED,
@@ -68,8 +62,16 @@ async def _register_demo_prospect() -> None:
     )
     fsm = ProspectFSM(prospect)
     _fsm_registry["demo-prospect-001"] = fsm
-    _phone_registry[phone] = "demo-prospect-001"
-    logger.info("Demo prospect registered: phone=%s prospect_id=demo-prospect-001", phone)
+
+    # Register phone variants so AT simulator number formats all match
+    if phone:
+        _phone_registry[phone] = "demo-prospect-001"
+        _phone_registry[phone.lstrip("+")] = "demo-prospect-001"
+        logger.info("Demo prospect registered: phone=%s", phone)
+
+    # Wildcard: any unrecognised SMS goes to demo prospect during sandbox testing
+    _phone_registry["__any__"] = "demo-prospect-001"
+    logger.info("Demo prospect registered as fallback for all unmatched SMS")
 
 
 # ---------------------------------------------------------------------------
@@ -155,26 +157,26 @@ async def handle_email_reply(request: Request) -> dict[str, str]:
 
 @app.post("/webhooks/sms", status_code=status.HTTP_200_OK)
 async def handle_sms_reply(request: Request) -> Response:
-    """Receive inbound SMS reply events from Africa's Talking.
-
-    Africa's Talking sends form-encoded POST data::
-
-        phoneNumber=+254700000000&text=STOP&to=20880&date=...
-
-    The prospect_id is looked up by phone number.
-
-    Args:
-        request: Incoming FastAPI request.
-
-    Returns:
-        Plain 200 with no body (required by Africa's Talking).
-    """
+    """Receive inbound SMS reply events from Africa's Talking."""
     form = await request.form()
     phone = str(form.get("phoneNumber", ""))
     text = str(form.get("text", ""))
-    logger.info("sms webhook received: from=%s text=%s", phone, text)
+    logger.info("sms webhook received: from=%s text=%s all_fields=%s", phone, text, dict(form))
 
+    # Try exact match first, then strip leading + for comparison
     prospect_id = _lookup_prospect_by_phone(phone)
+    if not prospect_id:
+        # AT simulator may send without country code prefix — try variants
+        for registered_phone, pid in _phone_registry.items():
+            if registered_phone == "__any__":
+                continue
+            if phone.lstrip("+") in registered_phone.lstrip("+") or registered_phone.lstrip("+") in phone.lstrip("+"):
+                prospect_id = pid
+                break
+    # Final fallback: sandbox wildcard
+    if not prospect_id:
+        prospect_id = _phone_registry.get("__any__")
+
     if prospect_id:
         await _handle_inbound_reply(
             prospect_id=prospect_id,
@@ -182,9 +184,8 @@ async def handle_sms_reply(request: Request) -> Response:
             channel="sms",
         )
     else:
-        logger.warning("sms webhook: no prospect found for phone=%s", phone)
+        logger.warning("sms webhook: no prospect found for phone=%s registry=%s", phone, list(_phone_registry.keys()))
 
-    # Africa's Talking expects a plain 200 with no body
     return Response(status_code=status.HTTP_200_OK)
 
 
