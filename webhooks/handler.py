@@ -16,11 +16,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import FastAPI, Request, Response, status
 
+from config.models import Prospect, ProspectState, Segment
 from crm_writer.writer import CRMWriter
 from nurture_sequencer.state_machine import ProspectFSM
 
@@ -37,6 +39,37 @@ _fsm_registry: dict[str, ProspectFSM] = {}
 
 # Phone-number → prospect_id lookup (populated when prospects are registered)
 _phone_registry: dict[str, str] = {}
+
+
+@app.on_event("startup")
+async def _register_demo_prospect() -> None:
+    """Pre-register the staff-sink prospect so SMS webhooks can match by phone.
+
+    Reads STAFF_SINK_PHONE from env. This lets the AT simulator callback
+    resolve to a known prospect_id without a running pipeline.
+    """
+    phone = os.environ.get("STAFF_SINK_PHONE", "").strip()
+    email = os.environ.get("STAFF_SINK_EMAIL", "demo@tenacious-sandbox.dev").strip()
+    if not phone:
+        return
+
+    prospect = Prospect(
+        prospect_id="demo-prospect-001",
+        company_id="demo-co-001",
+        contact_name="Demo Prospect",
+        email=email,
+        phone=phone,
+        timezone="America/New_York",
+        preferred_channel="email",
+        current_state=ProspectState.CONTACTED,
+        outbound_attempt_count=1,
+        segment=Segment.S1,
+        hiring_signal_brief_ref=None,
+    )
+    fsm = ProspectFSM(prospect)
+    _fsm_registry["demo-prospect-001"] = fsm
+    _phone_registry[phone] = "demo-prospect-001"
+    logger.info("Demo prospect registered: phone=%s prospect_id=demo-prospect-001", phone)
 
 
 # ---------------------------------------------------------------------------
