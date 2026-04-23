@@ -307,6 +307,26 @@ def _build_funding_event(funding: Optional[FundingEventResult]) -> Optional[Fund
     )
 
 
+def _layoff_confidence(
+    headcount_affected: Optional[int],
+    percentage_cut: Optional[float],
+) -> Optional[str]:
+    """Derive confidence for a layoff event from available quantitative data.
+
+    Rules:
+    - "high"   if both headcount and percentage are present
+    - "medium" if exactly one quantitative field is present
+    - "low"    if neither is present but an event was detected
+    """
+    has_headcount = headcount_affected is not None
+    has_pct = percentage_cut is not None
+    if has_headcount and has_pct:
+        return "high"
+    if has_headcount or has_pct:
+        return "medium"
+    return "low"
+
+
 def _build_layoff_event(layoff: Optional[LayoffScanResult]) -> Optional[LayoffEvent]:
     """
     Map a LayoffScanResult to a LayoffEvent model, or None if not provided.
@@ -323,7 +343,7 @@ def _build_layoff_event(layoff: Optional[LayoffScanResult]) -> Optional[LayoffEv
         event_date=layoff.event_date,
         headcount_affected=layoff.headcount_affected,
         percentage_cut=layoff.percentage_cut,
-        confidence=None,  # LayoffScanResult has no confidence field; propagate null
+        confidence=_layoff_confidence(layoff.headcount_affected, layoff.percentage_cut),
     )
 
 
