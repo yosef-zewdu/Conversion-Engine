@@ -113,18 +113,11 @@ class CalConfig:
 
     @classmethod
     def from_env(cls) -> CalConfig:
-        """
-        Build a ``CalConfig`` from environment variables.
-
-        Reads ``CAL_BASE_URL`` and ``CAL_API_KEY`` via ``os.environ``.
-        These variables are validated at startup by ``config/settings.py``.
-
-        Returns:
-            A populated ``CalConfig`` instance.
-        """
+        """Build a ``CalConfig`` from environment variables."""
         return cls(
-            cal_base_url=os.environ.get("CAL_BASE_URL", "http://localhost:3000"),
+            cal_base_url=os.environ.get("CAL_BASE_URL", "https://api.cal.eu"),
             cal_api_key=os.environ["CAL_API_KEY"],
+            event_type_id=int(os.environ.get("CAL_EVENT_TYPE_ID", "268206")),
         )
 
 
@@ -186,7 +179,7 @@ def _parse_slots(raw_slots: list[dict[str, Any]], tz: str) -> list[Slot]:
     """
     slots: list[Slot] = []
     for raw in raw_slots:
-        start = raw.get("time", raw.get("startTime", ""))
+        start = raw.get("start", raw.get("time", ""))
         # Cal.com v1 slots endpoint returns {"time": "..."} per slot
         # Derive end time: assume 30-minute slots when not provided
         end = raw.get("endTime", "")
@@ -241,21 +234,37 @@ async def get_available_slots(cal_config: CalConfig, tz: str) -> list[Slot]:
         "timeZone": resolve_iana_zone(tz),
     }
 
-    url = f"{cal_config.cal_base_url}/api/v1/slots/available"
+    # Cal.com v2 API
+    url = f"{cal_config.cal_base_url}/v2/slots"
+    headers = {
+        "cal-api-key": cal_config.cal_api_key,
+        "cal-api-version": "2024-09-04",
+    }
+    params = {
+        "eventTypeId": cal_config.event_type_id,
+        "start": f"{today.isoformat()}T00:00:00Z",
+        "end": f"{end_date.isoformat()}T23:59:59Z",
+        "timeZone": resolve_iana_zone(tz),
+    }
 
     async with httpx.AsyncClient(timeout=10.0) as client:
-        response = await client.get(url, params=params)
+        response = await client.get(url, params=params, headers=headers)
         response.raise_for_status()
         data = response.json()
 
-    # Cal.com v1 returns {"slots": {"YYYY-MM-DD": [{"time": "..."}], ...}}
+    # Cal.com v2 actual response: {"data": {"YYYY-MM-DD": [{"start": "..."}, ...], ...}}
+    # The data dict maps dates directly to slot lists (no nested "slots" key)
     raw_slots: list[dict[str, Any]] = []
-    slots_by_date = data.get("slots", {})
-    if isinstance(slots_by_date, dict):
-        for day_slots in slots_by_date.values():
-            raw_slots.extend(day_slots)
-    elif isinstance(slots_by_date, list):
-        raw_slots = slots_by_date
+    slots_data = data.get("data", data)
+    if isinstance(slots_data, dict):
+        for val in slots_data.values():
+            if isinstance(val, list):
+                raw_slots.extend(val)
+            elif isinstance(val, dict):
+                # nested slots key fallback
+                for day_slots in val.values():
+                    if isinstance(day_slots, list):
+                        raw_slots.extend(day_slots)
 
     slots = _parse_slots(raw_slots, tz)
 
@@ -310,22 +319,23 @@ async def create_booking(
     payload = {
         "eventTypeId": cal_config.event_type_id,
         "start": slot.start_utc,
-        "end": slot.end_utc,
-        "responses": {
+        "attendee": {
             "name": prospect.contact_name,
             "email": prospect.email,
-            "phone": prospect.phone or "",
+            "timeZone": resolve_iana_zone(prospect.timezone),
+            "language": "en",
         },
-        "timeZone": resolve_iana_zone(prospect.timezone),
-        "language": "en",
         "metadata": {
             "prospect_id": prospect.prospect_id,
             "brief_ref": brief_ref,
         },
     }
 
-    url = f"{cal_config.cal_base_url}/api/v1/bookings"
-    headers = {"Authorization": f"Bearer {cal_config.cal_api_key}"}
+    url = f"{cal_config.cal_base_url}/v2/bookings"
+    headers = {
+        "cal-api-key": cal_config.cal_api_key,
+        "cal-api-version": "2024-08-13",
+    }
 
     last_exc: Exception | None = None
 
@@ -337,7 +347,11 @@ async def create_booking(
                 data = response.json()
 
             cal_event_id = str(
-                data.get("id") or data.get("uid") or data.get("bookingId", "")
+                data.get("data", {}).get("uid")
+                or data.get("data", {}).get("id")
+                or data.get("uid")
+                or data.get("id")
+                or data.get("bookingId", "")
             )
             segment = prospect.segment or Segment.UNQUALIFIED
 
