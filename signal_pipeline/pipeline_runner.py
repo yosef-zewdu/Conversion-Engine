@@ -155,7 +155,18 @@ class PipelineRunner:
         # ------------------------------------------------------------------
         # 2. ICP classification
         # ------------------------------------------------------------------
-        classifier_config = ClassifierConfig()
+        # Wire headcount and open-role count into ClassifierConfig so the
+        # classifier can enforce headcount and role-count gates (S1/S2/S3).
+        _open_roles: Optional[int] = None
+        if brief.hiring_velocity is not None:
+            _open_roles = brief.hiring_velocity.open_roles_today
+        elif brief.job_post_count is not None:
+            _open_roles = brief.job_post_count
+        classifier_config = ClassifierConfig(
+            employee_min=brief.employee_count_min,
+            employee_max=brief.employee_count_max,
+            open_roles=_open_roles,
+        )
         segment_result = classify(brief, classifier_config)
         prospect.segment = segment_result.segment
 
@@ -276,15 +287,22 @@ class PipelineRunner:
             BriefValidationError: When assembled brief fails schema validation.
         """
         company_id = prospect.company_id
-        company_name = prospect.company_id  # fallback; real name from firmographic
+        # Prefer a stored display name; fall back to company_id only as last resort
+        company_name = getattr(prospect, "company_name", None) or prospect.company_id
 
-        firmographic = self._firmographic.enrich_by_name(company_id)
-        # Use the enriched name if available
+        # Try UUID-exact lookup first, then fuzzy-by-name
+        firmographic = self._firmographic.enrich_by_id(company_id)
+        if firmographic.company_name is None and company_name != company_id:
+            firmographic = self._firmographic.enrich_by_name(company_name)
+        # Use the enriched display name when available
         if firmographic.company_name:
             company_name = firmographic.company_name
 
-        layoff = self._layoff.most_recent(company_id)
-        job_posts = await self._job_posts.scrape(company_id, None)
+        layoff = self._layoff.most_recent(company_name)
+        # Pass the real company name and homepage URL — not the UUID
+        job_posts = await self._job_posts.scrape(
+            company_name, firmographic.website
+        )
         leadership = self._leadership.detect(firmographic.raw_leadership_hire)
         funding = self._funding.fetch(firmographic.raw_funding_rounds)
 
@@ -298,10 +316,15 @@ class PipelineRunner:
         )
 
         modern_data_ml_stack: Optional[bool] = None
+        # Combine tech signals from both scraper and firmographic BuiltWith data
+        all_tech = set()
         if job_posts is not None and job_posts.tech_signals:
-            tech_lower = {t.lower() for t in job_posts.tech_signals}
-            if tech_lower & _ML_STACK_KEYWORDS:
-                modern_data_ml_stack = True
+            all_tech.update(t.lower() for t in job_posts.tech_signals)
+        if firmographic.builtwith_tech:
+            all_tech.update(t.lower() for t in firmographic.builtwith_tech)
+            
+        if all_tech & _ML_STACK_KEYWORDS:
+            modern_data_ml_stack = True
 
         ai_input = AIMaturityInput(
             ai_adjacent_open_roles=ai_adjacent_open_roles,

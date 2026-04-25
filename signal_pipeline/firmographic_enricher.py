@@ -157,18 +157,33 @@ def _load_csv() -> Optional[list[dict]]:
         return _cache
 
     _cache_loaded = True
+    # Use env var if set, otherwise fall back to the project-bundled data file
     env_path = os.environ.get("CRUNCHBASE_ODM_PATH")
-    if not env_path:
-        logger.warning(
-            "CRUNCHBASE_ODM_PATH is not set — FirmographicEnricher will return null results."
-        )
-        return None
+    _project_root = Path(__file__).parent.parent
+    _default_csv = _project_root / "data" / "crunchbase-companies-information.csv"
 
-    csv_path = _find_csv(env_path)
+    if env_path:
+        candidate = Path(env_path)
+        # If the env var points to a valid CSV file, use it; otherwise use the project default
+        if candidate.is_file() and candidate.suffix.lower() == ".csv":
+            resolved_path: Path = candidate
+        elif candidate.is_dir():
+            # Look for any CSV inside that dir
+            csvs = list(candidate.glob("**/*.csv"))
+            resolved_path = csvs[0] if csvs else _default_csv
+        else:
+            logger.warning(
+                "CRUNCHBASE_ODM_PATH=%r does not exist — falling back to project data/", env_path
+            )
+            resolved_path = _default_csv
+    else:
+        resolved_path = _default_csv
+
+    csv_path = _find_csv(str(resolved_path))
     if csv_path is None:
         logger.warning(
-            "No CSV file found at CRUNCHBASE_ODM_PATH=%r — FirmographicEnricher will return null results.",
-            env_path,
+            "No CSV file found at %r — FirmographicEnricher will return null results.",
+            resolved_path,
         )
         return None
 
@@ -221,12 +236,15 @@ class FirmographicEnricher:
         return self._build_result(record)
 
     def enrich_by_id(self, company_id: str) -> FirmographicResult:
-        """Exact match on the 'id' (permalink/slug) column."""
+        """Exact match on the 'uuid' or 'id' column."""
         records = self._records()
         if not records:
             return _null_result()
 
-        record = next((r for r in records if r.get("id") == company_id), None)
+        record = next(
+            (r for r in records if r.get("uuid") == company_id or r.get("id") == company_id),
+            None,
+        )
         if record is None:
             logger.debug("No Crunchbase record for company_id=%r", company_id)
             return _null_result()

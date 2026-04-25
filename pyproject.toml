@@ -14,6 +14,7 @@ packages = [
     "booking_agent",
     "config",
     "crm_writer",
+    "db",
     "eval_harness",
     "evidence_graph",
     "icp_classifier",
@@ -32,6 +33,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "aiosqlite>=0.20.0",
     "fastapi>=0.136.0",
     "httpx>=0.28.0",
     "hypothesis>=6.152.1",
@@ -45,5 +47,6 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "python-multipart>=0.0.9",
     "resend>=2.10.0",
+    "sqlalchemy>=2.0.0",
     "uvicorn>=0.44.0",
 ]

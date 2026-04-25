@@ -220,68 +220,72 @@ class AIMaturityScorer:
         final_score = _ratio_to_score(ratio)
         confidence = _assign_confidence(inputs)
 
-        # --- Per-signal justification ---
+        # --- Per-signal justification (aligned to official schema field names) ---
+        # confidence per signal: "low" when value is None (no data), "medium" otherwise
+        def _sig_confidence(val: object) -> str:
+            return "low" if val is None else "medium"
+
         justification: list[AIMaturityJustificationEntry] = [
             AIMaturityJustificationEntry(
                 signal="ai_adjacent_open_roles",
+                status=_justify_ai_adjacent_open_roles(inputs.ai_adjacent_open_roles, roles_raw),
                 weight="high",
-                value=inputs.ai_adjacent_open_roles,
-                justification=_justify_ai_adjacent_open_roles(inputs.ai_adjacent_open_roles, roles_raw),
+                confidence=_sig_confidence(inputs.ai_adjacent_open_roles),
             ),
             AIMaturityJustificationEntry(
                 signal="named_ai_ml_leadership",
-                weight="high",
-                value=inputs.named_ai_ml_leadership,
-                justification=_justify_bool(
+                status=_justify_bool(
                     "named_ai_ml_leadership",
                     inputs.named_ai_ml_leadership,
                     "Named AI/ML leadership detected → strong organizational AI signal",
                     "No named AI/ML leadership detected → weak organizational AI signal",
                 ),
+                weight="high",
+                confidence=_sig_confidence(inputs.named_ai_ml_leadership),
             ),
             AIMaturityJustificationEntry(
-                signal="github_ai_activity",
-                weight="medium",
-                value=inputs.github_ai_activity,
-                justification=_justify_bool(
-                    "github_ai_activity",
+                signal="github_org_activity",
+                status=_justify_bool(
+                    "github_org_activity",
                     inputs.github_ai_activity,
                     "Public GitHub AI/ML activity detected → active AI development signal",
                     "No public GitHub AI/ML activity detected → no active AI development signal",
                 ),
+                weight="medium",
+                confidence=_sig_confidence(inputs.github_ai_activity),
             ),
             AIMaturityJustificationEntry(
-                signal="executive_ai_commentary",
-                weight="medium",
-                value=inputs.executive_ai_commentary,
-                justification=_justify_bool(
-                    "executive_ai_commentary",
+                signal="executive_commentary",
+                status=_justify_bool(
+                    "executive_commentary",
                     inputs.executive_ai_commentary,
                     "Executive AI commentary detected → AI is a stated priority",
                     "No executive AI commentary detected → AI not a stated priority",
                 ),
+                weight="medium",
+                confidence=_sig_confidence(inputs.executive_ai_commentary),
             ),
             AIMaturityJustificationEntry(
                 signal="modern_data_ml_stack",
-                weight="low",
-                value=inputs.modern_data_ml_stack,
-                justification=_justify_bool(
+                status=_justify_bool(
                     "modern_data_ml_stack",
                     inputs.modern_data_ml_stack,
                     "Modern data/ML stack detected (e.g. PyTorch, Spark) → infrastructure readiness signal",
                     "No modern data/ML stack detected → limited infrastructure readiness",
                 ),
+                weight="low",
+                confidence=_sig_confidence(inputs.modern_data_ml_stack),
             ),
             AIMaturityJustificationEntry(
                 signal="strategic_communications",
-                weight="low",
-                value=inputs.strategic_communications,
-                justification=_justify_bool(
+                status=_justify_bool(
                     "strategic_communications",
                     inputs.strategic_communications,
                     "Strategic AI communications detected → public AI commitment signal",
                     "No strategic AI communications detected → no public AI commitment signal",
                 ),
+                weight="low",
+                confidence=_sig_confidence(inputs.strategic_communications),
             ),
         ]
 

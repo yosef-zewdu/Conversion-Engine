@@ -1,0 +1,101 @@
+import logging
+from fastapi import APIRouter, Depends, Request, status
+from sqlalchemy.ext.asyncio import AsyncSession
+from db.session import get_db
+from webhooks.schemas import ResendPayload, CalcomPayload
+from webhooks.agent_runner import run_agent
+from webhooks.utils import get_prospect_by_id, get_prospect_by_email, get_prospect_by_phone
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/webhooks", tags=["webhooks"])
+
+_BOUNCE_EVENT_TYPES = frozenset([
+    "email.bounced",
+    "email.delivery_delayed",
+    "email.delivery_failed",
+    "email.complained",
+])
+
+_REPLY_EVENT_TYPES = frozenset([
+    "email.replied",
+    "email.opened",
+])
+
+@router.post("/email", status_code=status.HTTP_200_OK)
+async def handle_email_reply(
+    payload: ResendPayload,
+    db: AsyncSession = Depends(get_db)
+) -> dict[str, str]:
+    event_type = payload.type
+    data = payload.data
+    logger.info("email webhook: type=%s", event_type)
+
+    prospect_id = data.tags.get("prospect_id")
+    from_email = data.from_email
+
+    if event_type in _BOUNCE_EVENT_TYPES:
+        logger.warning("email webhook: %s for prospect_id=%s email=%s", event_type, prospect_id, from_email)
+        return {"received": "bounce_logged"}
+
+    if event_type in _REPLY_EVENT_TYPES or event_type == "":
+        content = data.text or data.html or ""
+        prospect = None
+        if prospect_id:
+            prospect = await get_prospect_by_id(db, prospect_id)
+        if not prospect:
+            prospect = await get_prospect_by_email(db, from_email)
+
+        if prospect:
+            await run_agent(prospect, content, channel="email")
+        else:
+            logger.warning("email webhook: no prospect found for id=%s from=%s", prospect_id, from_email)
+        return {"received": "ok"}
+
+    return {"received": "ok", "note": f"unhandled type: {event_type}"}
+
+@router.post("/sms", status_code=status.HTTP_200_OK)
+async def handle_sms_reply(
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    from fastapi import Response
+    form = await request.form()
+    phone = str(form.get("phoneNumber", ""))
+    text = str(form.get("text", ""))
+    logger.info("sms webhook: from=%s text=%s", phone, text)
+
+    prospect = await get_prospect_by_phone(db, phone)
+
+    if prospect:
+        await run_agent(prospect, text, channel="sms")
+    else:
+        logger.warning("sms webhook: no prospect for phone=%s", phone)
+
+    return Response(status_code=status.HTTP_200_OK)
+
+@router.post("/cal", status_code=status.HTTP_200_OK)
+async def handle_cal_event(
+    payload: CalcomPayload,
+    db: AsyncSession = Depends(get_db)
+) -> dict[str, str]:
+    trigger = payload.triggerEvent
+    logger.info("cal webhook: trigger=%s", trigger)
+
+    cal_payload = payload.payload
+    prospect_id = (cal_payload.get("metadata") or {}).get("prospect_id")
+    cal_event_id = cal_payload.get("uid", "")
+
+    if trigger == "BOOKING_CREATED" and prospect_id:
+        prospect = await get_prospect_by_id(db, prospect_id)
+        if prospect:
+            msg = f"Your discovery call has been confirmed. Cal.com event ID: {cal_event_id}"
+            await run_agent(prospect, msg, channel="email", cal_event_id=cal_event_id)
+
+    return {"received": "ok"}
+
+@router.post("/hubspot", status_code=status.HTTP_200_OK)
+async def handle_hubspot_event(request: Request) -> dict[str, str]:
+    payload = await request.json()
+    logger.info("hubspot webhook: %s", payload)
+    return {"received": "ok"}

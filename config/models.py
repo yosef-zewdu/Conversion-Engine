@@ -72,3 +72,49 @@ class Booking:
     prospect_id: str
     segment: Segment
     brief_ref: str             # HiringSignalBrief.company_id + last_enriched_at
+
+
+# ── Act IV: 3-stage chain data models ────────────────────────────
+
+@dataclass
+class ResearchField:
+    """Single extracted fact with confidence gating pre-applied by Stage 1."""
+    included: bool
+    confidence: str | None = None   # "high" | "medium" | "low" | None
+    fact: str | None = None         # Pre-screened fact text for Stage 2 Closer
+    phrasing: str = "omit"          # "assertive" | "interrogative" | "omit"
+    reason: str | None = None       # Exclusion reason when included=False
+
+
+@dataclass
+class ResearchSummary:
+    """
+    Output of Stage 1 ResearcherAgent.
+
+    The Closer (Stage 2) receives ONLY this object — never the raw
+    HiringSignalBrief.  Structural separation is the mechanism's core guarantee:
+    the Closer cannot assert low-confidence facts it has never seen.
+    """
+    company_name: str
+    funding: ResearchField
+    hiring: ResearchField
+    ai_maturity: ResearchField
+    competitor_gap: ResearchField
+    layoff: ResearchField
+    bench_mismatch: bool = False
+
+    def to_prompt_block(self) -> str:
+        """Format for Stage 2 Closer prompt (no raw brief data leaks through)."""
+        lines = [f"company: {self.company_name}"]
+        for attr in ("funding", "hiring", "ai_maturity", "competitor_gap", "layoff"):
+            rf: ResearchField = getattr(self, attr)
+            if rf.included:
+                lines.append(
+                    f"{attr}: {rf.fact}  "
+                    f"[phrasing={rf.phrasing}, confidence={rf.confidence}]"
+                )
+            else:
+                lines.append(f"{attr}: OMIT — {rf.reason or 'excluded'}")
+        if self.bench_mismatch:
+            lines.append("bench_mismatch: True — do not make capacity commitments")
+        return "\n".join(lines)
