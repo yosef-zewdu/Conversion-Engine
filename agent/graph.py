@@ -79,6 +79,10 @@ class AgentState(TypedDict):
     destination: Optional[str]
     cal_event_id: Optional[str]
     error: Optional[str]
+    # Act IV mechanism outputs
+    policy_decision: Optional[dict]   # PolicyDecision as dict, set after policy_review node
+    mechanism_metadata: Optional[dict]  # ToneGuard score + stage1 include flags
+    icp_result: Optional[dict]         # Full classification result (segment, confidence, signals_used)
 
 
 # ---------------------------------------------------------------------------
@@ -124,6 +128,16 @@ async def node_enrich(state: AgentState) -> dict:
 
     prospect_dict = state.get("prospect") or {}
     company_id = prospect_dict.get("company_id", "")
+
+    # Use pre-baked briefs when supplied (demo / campaign queue path)
+    pre_baked_brief = prospect_dict.get("hiring_signal_brief")
+    pre_baked_gap = prospect_dict.get("competitor_gap_brief")
+    if pre_baked_brief:
+        logger.info("Enrichment: using pre-baked brief for prospect_id=%s", prospect_dict.get("prospect_id"))
+        return {
+            "hiring_signal_brief": pre_baked_brief,
+            "competitor_gap_brief": pre_baked_gap,
+        }
 
     # Skip heavy scraping for synthetic/test prospects
     _SYNTHETIC_MARKERS = ("test", "demo", "synthetic", "sandbox", "fake")
@@ -204,10 +218,16 @@ async def node_classify(state: AgentState) -> dict:
         return {
             "segment": segment_result.segment.value,
             "bench_mismatch": bench_result.bench_mismatch,
+            "icp_result": {
+                "segment": segment_result.segment.value,
+                "confidence": segment_result.confidence,
+                "signals_used": segment_result.signals_used,
+                "decision": "qualified" if not segment_result.abstained else "abstained",
+            },
         }
     except Exception as exc:  # noqa: BLE001
         logger.warning("Classification failed: %s", exc)
-        return {"segment": "unqualified", "bench_mismatch": False}
+        return {"segment": "unqualified", "bench_mismatch": False, "icp_result": None}
 
 
 # ---------------------------------------------------------------------------
@@ -610,11 +630,127 @@ async def node_persist(state: AgentState) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Node: compose_outbound
+# ---------------------------------------------------------------------------
+
+async def node_compose_outbound(state: AgentState) -> dict:
+    """Run the 3-stage mechanism chain to produce a draft outbound message.
+
+    Researcher → Closer → ToneGuard. Populates reply_text and mechanism_metadata.
+    Falls back to the LLM node when no hiring_signal_brief is available (e.g.
+    enrichment failed) so the graph degrades gracefully.
+
+    Args:
+        state: Current graph state.
+
+    Returns:
+        Partial state update with reply_text and mechanism_metadata.
+    """
+    from mechanism.three_stage_chain import compose_outbound_chain
+    from signal_pipeline.models import HiringSignalBrief, CompetitorGapBrief
+
+    brief_dict = state.get("hiring_signal_brief")
+    if not brief_dict:
+        # No brief — fall through to LLM node for a generic reply
+        return {}
+
+    prospect_dict = state.get("prospect") or {}
+    gap_dict = state.get("competitor_gap_brief")
+    channel = state.get("channel", "email")
+
+    try:
+        prospect = _dict_to_prospect(prospect_dict)
+        brief = HiringSignalBrief(**brief_dict)
+        gap_brief = CompetitorGapBrief(**gap_dict) if gap_dict else None
+
+        outbound = compose_outbound_chain(prospect, brief, gap_brief, channel)
+
+        logger.info(
+            "Mechanism chain complete: tone_score=%d violations=%s",
+            outbound.metadata.get("tone_score", 0),
+            outbound.metadata.get("tone_violations", []),
+        )
+        return {
+            "reply_text": outbound.content,
+            "mechanism_metadata": outbound.metadata,
+        }
+
+    except Exception as exc:
+        logger.warning("Mechanism chain failed (%s) — continuing to LLM node", exc)
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# Node: policy_review
+# ---------------------------------------------------------------------------
+
+async def node_policy_review(state: AgentState) -> dict:
+    """Run EvidenceCalibratedActionPolicy on the draft reply.
+
+    Blocks the send if the policy gate rejects the draft. Sets policy_decision
+    in state so the send_email node and persist node can include the decision ID.
+
+    Args:
+        state: Current graph state.
+
+    Returns:
+        Partial state update with policy_decision (and cleared reply_text if blocked).
+    """
+    from policies.action_policy import EvidenceCalibratedActionPolicy
+
+    reply_text = state.get("reply_text")
+    if not reply_text:
+        # Nothing to review
+        return {"policy_decision": None}
+
+    channel = state.get("channel", "email")
+    prospect = state.get("prospect") or {}
+
+    proposed_action = {
+        "action_type": f"send_{channel}",
+        "lead_id": prospect.get("prospect_id", ""),
+        "channel": channel,
+        "subject": state.get("mechanism_metadata", {}).get("subject", "") if state.get("mechanism_metadata") else "",
+        "body": reply_text,
+        "claims": [],
+        "requires_policy_review": True,
+    }
+
+    policy = EvidenceCalibratedActionPolicy()
+    decision = policy.review(dict(state), proposed_action)
+
+    decision_dict = {
+        "allowed": decision.allowed,
+        "requires_rewrite": decision.requires_rewrite,
+        "requires_human": decision.requires_human,
+        "violations": decision.violations,
+        "policy_version": decision.policy_version,
+        "policy_decision_id": decision.policy_decision_id,
+    }
+
+    if not decision.allowed:
+        logger.warning(
+            "PolicyGate blocked outbound for %s: %s",
+            prospect.get("prospect_id"),
+            decision.violations,
+        )
+        # Clear reply_text so send_email node sends nothing to prospect
+        return {
+            "policy_decision": decision_dict,
+            "reply_text": None,
+            "error": f"policy_blocked: {'; '.join(decision.violations)}",
+        }
+
+    logger.info("PolicyGate approved outbound (id=%s)", decision.policy_decision_id)
+    return {"policy_decision": decision_dict}
+
+
+# ---------------------------------------------------------------------------
 # Routing functions
 # ---------------------------------------------------------------------------
 
-def route_after_command(state: AgentState) -> Literal["llm", "kill_switch"]:
-    """Route to kill_switch if a command was detected, else to llm.
+def route_after_command(state: AgentState) -> Literal["compose_outbound", "kill_switch"]:
+    """Route to kill_switch if a command was detected, else to compose_outbound.
 
     Args:
         state: Current graph state.
@@ -624,11 +760,29 @@ def route_after_command(state: AgentState) -> Literal["llm", "kill_switch"]:
     """
     if state.get("command"):
         return "kill_switch"
+    return "compose_outbound"
+
+
+def route_after_compose(state: AgentState) -> Literal["policy_review", "llm"]:
+    """Route to policy_review if mechanism produced a draft, else to llm.
+
+    When the mechanism chain succeeds (reply_text is set), the draft goes
+    directly to policy_review — the LLM is bypassed for cost and consistency.
+    When no brief was available, fall through to the LLM node for a generic reply.
+
+    Args:
+        state: Current graph state.
+
+    Returns:
+        Next node name.
+    """
+    if state.get("reply_text"):
+        return "policy_review"
     return "llm"
 
 
-def route_after_llm(state: AgentState) -> Literal["tools", "kill_switch"]:
-    """Route to tools if LLM made tool calls, else to kill_switch.
+def route_after_llm(state: AgentState) -> Literal["tools", "policy_review"]:
+    """Route to tools if LLM made tool calls, else to policy_review.
 
     Args:
         state: Current graph state.
@@ -640,7 +794,7 @@ def route_after_llm(state: AgentState) -> Literal["tools", "kill_switch"]:
     last = messages[-1] if messages else None
     if isinstance(last, AIMessage) and getattr(last, "tool_calls", None):
         return "tools"
-    return "kill_switch"
+    return "policy_review"
 
 
 # ---------------------------------------------------------------------------
@@ -658,19 +812,26 @@ def build_graph() -> Any:
     builder.add_node("enrich", node_enrich)
     builder.add_node("classify", node_classify)
     builder.add_node("check_command", node_check_command)
+    builder.add_node("compose_outbound", node_compose_outbound)
+    builder.add_node("policy_review", node_policy_review)
     builder.add_node("llm", node_llm)
     builder.add_node("tools", node_tools)
     builder.add_node("kill_switch", node_kill_switch)
     builder.add_node("send_email", node_send_email)
     builder.add_node("persist", node_persist)
 
-    # Edges
+    # Edges — target graph:
+    # enrich → classify → check_command → compose_outbound → policy_review
+    #        → kill_switch → send_email → persist
+    # LLM fallback: compose_outbound → llm → policy_review (when no brief)
     builder.add_edge(START, "enrich")
     builder.add_edge("enrich", "classify")
     builder.add_edge("classify", "check_command")
     builder.add_conditional_edges("check_command", route_after_command)
+    builder.add_conditional_edges("compose_outbound", route_after_compose)
     builder.add_conditional_edges("llm", route_after_llm)
     builder.add_edge("tools", "llm")          # tool results loop back to LLM
+    builder.add_edge("policy_review", "kill_switch")
     builder.add_edge("kill_switch", "send_email")
     builder.add_edge("send_email", "persist")
     builder.add_edge("persist", END)
@@ -734,6 +895,9 @@ async def handle_inbound(
         "destination": None,
         "cal_event_id": cal_event_id,
         "error": None,
+        "policy_decision": None,
+        "mechanism_metadata": None,
+        "icp_result": None,
     }
 
     config = {"configurable": {"thread_id": prospect_id}}
@@ -756,7 +920,7 @@ def _dict_to_prospect(d: dict) -> Any:
     """
     from config.models import Prospect, ProspectState, Segment
 
-    return Prospect(
+    p = Prospect(
         prospect_id=d.get("prospect_id", "unknown"),
         company_id=d.get("company_id", "unknown"),
         contact_name=d.get("contact_name", ""),
@@ -769,6 +933,91 @@ def _dict_to_prospect(d: dict) -> Any:
         segment=Segment(d.get("segment")) if d.get("segment") else None,
         hiring_signal_brief_ref=d.get("hiring_signal_brief_ref"),
     )
+    if d.get("company_name"):
+        object.__setattr__(p, "company_name", d.get("company_name"))
+    return p
+
+
+_SEGMENT_PITCH_LANGUAGE: dict[str, str] = {
+    # Official pitch language per icp_definition.md
+    "s1": (
+        "This is a Series A/B company in growth mode. Lead with speed to capability: "
+        "'We help early-stage engineering teams scale their AI function faster than direct hire.' "
+        "Reference their specific open roles and funding round to ground the pitch. "
+        "Subject lines: 'Context: [Company] engineering velocity' or 'Question: scaling your AI team'."
+    ),
+    "segment_1": (  # legacy key
+        "This is a Series A/B company in growth mode. Lead with speed to capability: "
+        "'We help early-stage engineering teams scale their AI function faster than direct hire.' "
+        "Reference their specific open roles and funding round to ground the pitch."
+    ),
+    "segment_1_series_a_b": (
+        "This is a Series A/B company in growth mode. Lead with speed to capability: "
+        "'We help early-stage engineering teams scale their AI function faster than direct hire.' "
+        "Reference their specific open roles and funding round to ground the pitch. "
+        "Subject lines: 'Context: [Company] engineering velocity' or 'Question: scaling your AI team'."
+    ),
+    "s2": (
+        "This is a mid-market company post-restructure. Lead with cost-efficiency and flexibility: "
+        "'We embed senior engineers on a month-to-month basis — no severance risk, no headcount approval.' "
+        "Acknowledge the restructure with care; do not imply their team is inadequate. "
+        "Subject lines: 'Context: engineering capacity after [Company] restructure'."
+    ),
+    "segment_2": (
+        "This is a mid-market company post-restructure. Lead with cost-efficiency and flexibility. "
+        "Acknowledge the restructure with care; do not imply their team is inadequate."
+    ),
+    "segment_2_mid_market_restructure": (
+        "This is a mid-market company post-restructure. Lead with cost-efficiency and flexibility: "
+        "'We embed senior engineers on a month-to-month basis — no severance risk, no headcount approval.' "
+        "Acknowledge the restructure with care; do not imply their team is inadequate. "
+        "Subject lines: 'Context: engineering capacity after [Company] restructure'."
+    ),
+    "s3": (
+        "This is a leadership-transition prospect. Lead with the new CTO/VP Eng's mandate: "
+        "'New engineering leaders often need to move fast in the first 90 days. "
+        "We give them a force-multiplier without waiting for headcount approvals.' "
+        "Reference the specific leadership change found in the brief. "
+        "Subject lines: 'Request: 15 minutes with [New Leader Name]'."
+    ),
+    "segment_3": (
+        "This is a leadership-transition prospect. Lead with the new CTO/VP Eng's mandate. "
+        "Reference the specific leadership change found in the brief."
+    ),
+    "segment_3_leadership_transition": (
+        "This is a leadership-transition prospect. Lead with the new CTO/VP Eng's mandate: "
+        "'New engineering leaders often need to move fast in the first 90 days. "
+        "We give them a force-multiplier without waiting for headcount approvals.' "
+        "Reference the specific leadership change found in the brief. "
+        "Subject lines: 'Request: 15 minutes with [New Leader Name]'."
+    ),
+    "s4": (
+        "This is a specialized-capability gap prospect. Lead with the specific AI/ML gap identified: "
+        "reference the competitor gap finding and what peers in their sector are already doing. "
+        "Frame as a research finding, not a critique: "
+        "'Our sector scan shows X% of comparable companies now have a dedicated [capability] function.' "
+        "Only reference gaps with medium or high confidence. "
+        "Subject lines: 'Context: [Company] AI capability vs. sector peers'."
+    ),
+    "segment_4": (
+        "This is a specialized-capability gap prospect. Lead with the specific AI/ML gap identified. "
+        "Only reference gaps with medium or high confidence."
+    ),
+    "segment_4_specialized_capability": (
+        "This is a specialized-capability gap prospect. Lead with the specific AI/ML gap identified: "
+        "reference the competitor gap finding and what peers in their sector are already doing. "
+        "Frame as a research finding, not a critique. "
+        "Only reference gaps with medium or high confidence. "
+        "Subject lines: 'Context: [Company] AI capability vs. sector peers'."
+    ),
+}
+
+_SIGNATURE_TEMPLATE = """
+[First name]
+[Title, e.g., Research Partner]
+Tenacious Intelligence Corporation
+gettenacious.com
+""".strip()
 
 
 def _build_system_prompt(state: AgentState) -> str:
@@ -785,6 +1034,22 @@ def _build_system_prompt(state: AgentState) -> str:
     segment = state.get("segment") or "unqualified"
     bench_mismatch = state.get("bench_mismatch", False)
 
+    # Segment-specific pitch guidance from icp_definition.md
+    pitch_guidance = _SEGMENT_PITCH_LANGUAGE.get(
+        segment,
+        "No specific segment matched. Send a brief exploratory email without strong claims.",
+    )
+
+    # Honesty flags from brief — agent must respect these
+    honesty_flags = brief.get("honesty_flags", [])
+    flags_block = ""
+    if honesty_flags:
+        flags_block = (
+            "\n## Honesty Flags (from enrichment pipeline — MUST respect)\n"
+            + "\n".join(f"- {f}" for f in honesty_flags)
+            + "\n"
+        )
+
     # Load style guide
     style_guide_path = os.path.join(os.path.dirname(__file__), "style_guide.md")
     try:
@@ -793,28 +1058,45 @@ def _build_system_prompt(state: AgentState) -> str:
     except FileNotFoundError:
         style_guide = "Be professional, direct, and grounded in data."
 
+    # Derive hiring velocity language from official fields (open_roles_today preferred)
+    hv = brief.get("hiring_velocity") or {}
+    open_roles_today = hv.get("open_roles_today", brief.get("job_post_count"))
+    velocity_label = hv.get("velocity_label", "insufficient_signal")
+    hv_confidence = hv.get("signal_confidence", 0.0)
+
     prompt = f"""You are a sales development agent for Tenacious Consulting and Outsourcing.
 Your job is to qualify prospects and book discovery calls.
 
 ## Style Guide
 {style_guide}
 
+## Signature (use verbatim in every outreach email)
+{_SIGNATURE_TEMPLATE}
+
 ## Prospect Context
 - ICP Segment: {segment}
 - Bench mismatch: {bench_mismatch} (if True, do NOT commit to specific staffing capacity)
 
+## Segment-Specific Pitch Guidance
+{pitch_guidance}
+{flags_block}
 ## Hiring Signal Brief
 {json.dumps(brief, indent=2) if brief else "Not yet enriched."}
 
 ## Competitor Gap Brief
 {json.dumps(gap, indent=2) if gap else "Not available."}
 
-## Honesty Rules (CRITICAL)
+## Honesty Rules (CRITICAL — violations are grading disqualifiers)
 - Only assert claims when the brief shows confidence: "medium" or "high"
 - For confidence: "low" or null — use interrogative phrasing ("we noticed signals suggesting...")
-- Never claim "aggressive hiring" unless job_post_count >= 5 AND job_post_velocity_60d >= 3.0
+- Hiring velocity: use `hiring_velocity.velocity_label` to determine phrasing:
+  - "tripled_or_more" or "doubled" → assertive: "Your engineering team has grown significantly"
+  - "increased_modestly" → attribution: "Signals suggest modest hiring growth"
+  - "flat" or "declined" → omit or ask
+  - "insufficient_signal" → ask rather than assert; never invent a velocity claim
 - Never reference competitor gaps unless gap confidence is "medium" or "high"
 - Never commit to staffing capacity if bench_mismatch is True
+- Segment 4 (specialized capability): only pitch if the prospect's ai_maturity_score >= 2
 
 ## HubSpot Tools
 You have access to 9 HubSpot tools. Use them to:
@@ -828,5 +1110,9 @@ IMPORTANT:
 - Do NOT include tool schemas, JSON, or <tools> tags in your text reply to the prospect.
 - Your reply to the prospect must be plain conversational text only.
 - All outbound content is marked draft=true automatically.
+- Cold email body: max 120 words. Warm follow-up: max 200 words. One CTA per message.
+- Subject line must start with: Request: / Follow-up: / Context: / Question:
+- Never use: "I hope this finds you well", "Just following up", "Circling back",
+  "top talent", "world-class", "rockstar", "ninja", "bench" (in prospect-facing copy).
 """
     return prompt
