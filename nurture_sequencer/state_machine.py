@@ -16,6 +16,8 @@ from typing import Optional
 from config.models import Prospect, ProspectState, Segment
 from nurture_sequencer.outbound_message import OutboundMessage
 from signal_pipeline.models import CompetitorGapBrief, HiringSignalBrief
+from mechanism.three_stage_chain import compose_outbound_chain
+
 
 # ---------------------------------------------------------------------------
 # Opt-out detection
@@ -378,7 +380,7 @@ class ProspectFSM:
         self._prospect.outbound_attempt_count += 1
 
         # First message is ALWAYS email (Req 8.1)
-        return compose_outbound(self._prospect, brief, gap_brief, "email")
+        return compose_outbound_chain(self._prospect, brief, gap_brief, "email")
 
     def handle_inbound_reply(self, channel: str, content: str) -> None:
         """
@@ -452,7 +454,7 @@ class ProspectFSM:
             channel = "email"
 
         self._prospect.outbound_attempt_count += 1
-        return compose_outbound(self._prospect, brief, gap_brief, channel)
+        return compose_outbound_chain(self._prospect, brief, gap_brief, channel)
 
     def receive_opt_out(self, channel: str) -> None:
         """
