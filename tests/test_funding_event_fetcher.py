@@ -130,7 +130,7 @@ class TestFundingEventFetcher:
     def test_round_outside_window_not_detected(self):
         old_date = (REF_DATE - timedelta(days=WINDOW + 1)).isoformat()
         rounds = [_round(old_date)]
-        result = self.fetcher.fetch(rounds, reference_date=REF_DATE)
+        result = self.fetcher.fetch(rounds, reference_date=REF_DATE, ignore_date_window=False)
         assert result.detected is False
 
     def test_round_exactly_on_window_boundary_detected(self):
@@ -176,7 +176,7 @@ class TestFundingEventFetcher:
     def test_round_in_future_not_detected(self):
         future = (REF_DATE + timedelta(days=10)).isoformat()
         rounds = [_round(future)]
-        result = self.fetcher.fetch(rounds, reference_date=REF_DATE)
+        result = self.fetcher.fetch(rounds, reference_date=REF_DATE, ignore_date_window=False)
         assert result.detected is False
 
     def test_invalid_date_skipped(self):
@@ -244,7 +244,7 @@ def test_property_detected_iff_round_in_window(rounds):
     detected=True iff at least one round has announced_on within [ref-180, ref].
     """
     fetcher = FundingEventFetcher()
-    result = fetcher.fetch(rounds, reference_date=REF_DATE)
+    result = fetcher.fetch(rounds, reference_date=REF_DATE, ignore_date_window=False)
 
     window_start = REF_DATE - timedelta(days=WINDOW)
     has_in_window = any(
@@ -265,7 +265,7 @@ def test_property_most_recent_round_selected(rounds):
     When detected, close_date is the maximum announced_on among in-window rounds.
     """
     fetcher = FundingEventFetcher()
-    result = fetcher.fetch(rounds, reference_date=REF_DATE)
+    result = fetcher.fetch(rounds, reference_date=REF_DATE, ignore_date_window=False)
 
     if not result.detected:
         return  # nothing to check

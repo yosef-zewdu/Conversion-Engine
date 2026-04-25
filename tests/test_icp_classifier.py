@@ -124,22 +124,23 @@ class TestSegment1:
 
     def test_beyond_180_days_does_not_qualify(self):
         brief = self._brief_with_funding("Series A", 10_000_000, 181, "high")
-        result = classify(brief, _default_config())
+        result = classify(brief, _default_config(ignore_dates=False))
         assert result.segment != Segment.S1
 
     def test_confidence_high_maps_to_0_9(self):
+        # S1 requires headcount + open_roles data for full confidence per icp_definition.md
         brief = self._brief_with_funding("Series A", 10_000_000, 30, "high")
-        result = classify(brief, _default_config())
+        result = classify(brief, _default_config(employee_min=30, employee_max=60, open_roles=7))
         assert result.confidence == pytest.approx(0.9)
 
     def test_confidence_medium_maps_to_0_7(self):
         brief = self._brief_with_funding("Series A", 10_000_000, 30, "medium")
-        result = classify(brief, _default_config())
+        result = classify(brief, _default_config(employee_min=30, employee_max=60, open_roles=7))
         assert result.confidence == pytest.approx(0.7)
 
     def test_confidence_low_maps_to_0_5(self):
         brief = self._brief_with_funding("Series A", 10_000_000, 30, "low")
-        result = classify(brief, _default_config())
+        result = classify(brief, _default_config(employee_min=30, employee_max=60, open_roles=7))
         assert result.confidence == pytest.approx(0.5)
 
     def test_signals_used(self):
@@ -174,7 +175,7 @@ class TestSegment2:
         brief = self._brief_with_layoff(30, "high")
         result = classify(brief, _default_config())
         assert result.segment == Segment.S2
-        assert result.confidence <= 0.5
+        assert result.confidence <= 0.6
 
     def test_employee_min_above_2000_disqualifies(self):
         brief = self._brief_with_layoff(30, "high")
@@ -203,8 +204,9 @@ class TestSegment2:
         assert result.segment == Segment.S2
 
     def test_confidence_high_maps_to_0_85(self):
+        # S2 requires open_roles data for full confidence per icp_definition.md
         brief = self._brief_with_layoff(30, "high")
-        result = classify(brief, _default_config(employee_min=500, employee_max=1000))
+        result = classify(brief, _default_config(employee_min=500, employee_max=1000, open_roles=5))
         assert result.confidence == pytest.approx(0.85)
 
     def test_confidence_medium_maps_to_0_65(self):
@@ -245,13 +247,14 @@ class TestSegment3:
         assert result.segment == Segment.S3
 
     def test_confidence_high_maps_to_0_9(self):
+        # S3 requires headcount data for full confidence per icp_definition.md
         brief = self._brief_with_leadership(30, "high")
-        result = classify(brief, _default_config())
+        result = classify(brief, _default_config(employee_min=100, employee_max=300))
         assert result.confidence == pytest.approx(0.9)
 
     def test_confidence_medium_maps_to_0_7(self):
         brief = self._brief_with_leadership(30, "medium")
-        result = classify(brief, _default_config())
+        result = classify(brief, _default_config(employee_min=100, employee_max=300))
         assert result.confidence == pytest.approx(0.7)
 
     def test_signals_used(self):
@@ -291,11 +294,13 @@ class TestSegment4:
         result = classify(brief, _default_config())
         assert result.segment != Segment.S4
 
-    def test_score_2_without_ml_tools_does_not_qualify(self):
+    def test_score_2_without_ml_tools_still_qualifies(self):
+        # Per official icp_definition.md, S4 gate is ai_maturity_score >= 2 only.
+        # ml_tools are not a hard requirement — they're an additional signal if present.
         ts = TechStack(ml_tools=[])
         brief = _base_brief(ai_maturity_score=2, tech_stack=ts)
         result = classify(brief, _default_config())
-        assert result.segment != Segment.S4
+        assert result.segment == Segment.S4
 
     def test_score_2_confidence_is_0_65(self):
         brief = self._brief_with_ai(2)
@@ -311,6 +316,7 @@ class TestSegment4:
         brief = self._brief_with_ai(2)
         result = classify(brief, _default_config())
         assert "ai_maturity_score" in result.signals_used
+        # tech_stack.ml_tools is included when present (this brief has ml_tools)
         assert "tech_stack.ml_tools" in result.signals_used
 
 
@@ -356,8 +362,8 @@ class TestAbstention:
 
 
 class TestTieBreaking:
-    def test_s1_wins_over_s2_at_same_confidence(self):
-        """When S1 and S2 both qualify at the same confidence, S1 wins (priority)."""
+    def test_s2_wins_over_s1_at_same_confidence(self):
+        """Official priority S2 > S3 > S4 > S1: S2 beats S1 when both qualify."""
         fe = FundingEvent(
             round_type="Series A",
             amount_usd=10_000_000,
@@ -368,31 +374,36 @@ class TestTieBreaking:
             event_date=_date_str(30),
             headcount_affected=100,
             percentage_cut=15.0,
-            confidence="high",  # → 0.85 (different map)
+            confidence="high",  # → 0.85
         )
         brief = _base_brief(funding_event=fe, layoff_event=le)
-        result = classify(brief, _default_config(employee_min=500, employee_max=1000))
-        assert result.segment == Segment.S1
+        result = classify(brief, _default_config(
+            employee_min=500, employee_max=1000,
+            open_roles=7,  # satisfies S1 >= 5 and S2 >= 3
+        ))
+        assert result.segment == Segment.S2
 
     def test_higher_confidence_wins_over_priority(self):
-        """S3 at 0.9 beats S1 at 0.7 (confidence takes precedence over priority)."""
+        """S1 at 0.9 beats S3 at 0.7 (confidence takes precedence over priority)."""
         fe = FundingEvent(
             round_type="Series A",
             amount_usd=10_000_000,
             close_date=_date_str(30),
+            confidence="high",   # → 0.9
+        )
+        lc = LeadershipChange(
+            role="CTO",
+            appointment_date=_date_str(30),
             confidence="medium",  # → 0.7
         )
-        lc = LeadershipChange(
-            role="CTO",
-            appointment_date=_date_str(30),
-            confidence="high",  # → 0.9
-        )
         brief = _base_brief(funding_event=fe, leadership_change=lc)
-        result = classify(brief, _default_config())
-        assert result.segment == Segment.S3
+        result = classify(brief, _default_config(
+            employee_min=60, employee_max=80, open_roles=6,  # qualifies S1
+        ))
+        assert result.segment == Segment.S1
 
-    def test_s1_wins_over_s3_at_equal_confidence(self):
-        """S1 and S3 both at 0.9 — S1 wins by priority."""
+    def test_s3_wins_over_s1_at_equal_confidence(self):
+        """Official priority: S3 beats S1 when both qualify at the same confidence."""
         fe = FundingEvent(
             round_type="Series A",
             amount_usd=10_000_000,
@@ -405,8 +416,11 @@ class TestTieBreaking:
             confidence="high",  # → 0.9
         )
         brief = _base_brief(funding_event=fe, leadership_change=lc)
-        result = classify(brief, _default_config())
-        assert result.segment == Segment.S1
+        result = classify(brief, _default_config(
+            employee_min=60, employee_max=80,
+            open_roles=6,  # qualifies S1 (>= 5)
+        ))
+        assert result.segment == Segment.S3
 
 
 # ---------------------------------------------------------------------------

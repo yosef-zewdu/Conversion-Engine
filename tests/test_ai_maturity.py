@@ -212,14 +212,14 @@ class TestAIMaturityScorer:
         assert len(result.justification) == 6
 
     def test_justification_signal_names(self):
-        """Req 3.2: justification entries have correct signal names."""
+        """Req 3.2: justification entries have correct signal names (aligned to official schema)."""
         result = self.scorer.score(AIMaturityInput())
         names = [e.signal for e in result.justification]
         assert names == [
             "ai_adjacent_open_roles",
             "named_ai_ml_leadership",
-            "github_ai_activity",
-            "executive_ai_commentary",
+            "github_org_activity",
+            "executive_commentary",
             "modern_data_ml_stack",
             "strategic_communications",
         ]
@@ -230,13 +230,13 @@ class TestAIMaturityScorer:
         weights = {e.signal: e.weight for e in result.justification}
         assert weights["ai_adjacent_open_roles"] == "high"
         assert weights["named_ai_ml_leadership"] == "high"
-        assert weights["github_ai_activity"] == "medium"
-        assert weights["executive_ai_commentary"] == "medium"
+        assert weights["github_org_activity"] == "medium"
+        assert weights["executive_commentary"] == "medium"
         assert weights["modern_data_ml_stack"] == "low"
         assert weights["strategic_communications"] == "low"
 
-    def test_justification_values_reflect_input(self):
-        """Req 3.2: justification value field matches the raw input."""
+    def test_justification_status_reflects_input(self):
+        """Req 3.2: justification status field is a non-empty string describing the signal."""
         inputs = AIMaturityInput(
             ai_adjacent_open_roles=3,
             named_ai_ml_leadership=True,
@@ -244,16 +244,16 @@ class TestAIMaturityScorer:
         )
         result = self.scorer.score(inputs)
         by_signal = {e.signal: e for e in result.justification}
-        assert by_signal["ai_adjacent_open_roles"].value == 3
-        assert by_signal["named_ai_ml_leadership"].value is True
-        assert by_signal["github_ai_activity"].value is False
+        assert "3 AI/ML open roles" in by_signal["ai_adjacent_open_roles"].status
+        assert "Named AI/ML leadership detected" in by_signal["named_ai_ml_leadership"].status
+        assert "No public GitHub" in by_signal["github_org_activity"].status
 
-    def test_justification_strings_are_non_empty(self):
-        """Req 3.2: every justification entry has a non-empty string."""
+    def test_justification_status_is_non_empty(self):
+        """Req 3.2: every justification entry has a non-empty status string."""
         result = self.scorer.score(AIMaturityInput(ai_adjacent_open_roles=2, named_ai_ml_leadership=True))
         for entry in result.justification:
-            assert isinstance(entry.justification, str)
-            assert len(entry.justification) > 0
+            assert isinstance(entry.status, str)
+            assert len(entry.status) > 0
 
     def test_req_3_3_fewer_than_2_high_signals_confidence_low(self):
         """Req 3.3: fewer than 2 high-weight signals → confidence 'low'."""
