@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 USER_AGENT = "ConversionEngine/1.0 (research bot; contact: admin@example.com)"
-PAGE_TIMEOUT_MS = 8_000
+PAGE_TIMEOUT_MS = 5_000
 VIEWPORT = {"width": 1280, "height": 800}
 
 TECH_KEYWORDS: list[str] = [

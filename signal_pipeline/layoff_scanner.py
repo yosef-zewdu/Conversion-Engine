@@ -59,18 +59,30 @@ def _load_csv() -> Optional[list[dict]]:
         return _cache
 
     _cache_loaded = True
+    # Use env var if set, otherwise fall back to the project-bundled data file
     env_path = os.environ.get("LAYOFFS_CSV_PATH")
-    if not env_path:
-        logger.warning(
-            "LAYOFFS_CSV_PATH is not set — LayoffScanner will return empty results."
-        )
-        return None
+    _project_root = Path(__file__).parent.parent
+    _default_csv = _project_root / "data" / "layoffs_data.csv"
 
-    csv_path = _find_csv(env_path)
-    if csv_path is None:
+    if env_path:
+        candidate = Path(env_path)
+        if candidate.is_file() and candidate.suffix.lower() == ".csv":
+            csv_path = candidate
+        elif candidate.is_dir():
+            csvs = list(candidate.glob("**/*.csv"))
+            csv_path = csvs[0] if csvs else _default_csv
+        else:
+            logger.warning(
+                "LAYOFFS_CSV_PATH=%r does not exist — falling back to project data/", env_path
+            )
+            csv_path = _default_csv
+    else:
+        csv_path = _default_csv
+
+    if not csv_path.exists():
         logger.warning(
-            "No CSV file found at LAYOFFS_CSV_PATH=%r — LayoffScanner will return empty results.",
-            env_path,
+            "No CSV file found at %r — LayoffScanner will return empty results.",
+            csv_path,
         )
         return None
 
@@ -144,6 +156,7 @@ class LayoffScanner:
         company_name: str,
         cutoff: float = 0.6,
         reference_date: Optional[date] = None,
+        ignore_date_window: Optional[bool] = None,
     ) -> list[LayoffScanResult]:
         """
         Return layoff events for *company_name* within the last 120 days.
@@ -161,6 +174,10 @@ class LayoffScanner:
         records = self._records()
         if not records:
             return []
+
+        if ignore_date_window is None:
+            import os
+            ignore_date_window = os.environ.get("ICP_IGNORE_DATES", "true").lower() == "true"
 
         ref = reference_date or date.today()
         window_start = ref - timedelta(days=self.WINDOW_DAYS)
@@ -182,7 +199,8 @@ class LayoffScanner:
             event_date = _parse_date(row.get("Date", ""))
             if event_date is None:
                 continue
-            if event_date < window_start:
+            # Skip window filter when ignore_date_window is set (static datasets)
+            if not ignore_date_window and event_date < window_start:
                 continue
 
             results.append(
@@ -204,15 +222,21 @@ class LayoffScanner:
         company_name: str,
         cutoff: float = 0.6,
         reference_date: Optional[date] = None,
+        ignore_date_window: Optional[bool] = None,
     ) -> Optional[LayoffScanResult]:
         """
-        Return the single most recent layoff event within the 120-day window,
-        or None if no event is found.
+        Return the single most recent layoff event.
 
         Args:
             company_name: The company name to look up.
             cutoff: Fuzzy match similarity threshold.
             reference_date: Reference date for the 120-day window.
+            ignore_date_window: Bypass the 120-day window check.
         """
-        events = self.scan(company_name, cutoff=cutoff, reference_date=reference_date)
+        events = self.scan(
+            company_name, 
+            cutoff=cutoff, 
+            reference_date=reference_date, 
+            ignore_date_window=ignore_date_window
+        )
         return events[0] if events else None

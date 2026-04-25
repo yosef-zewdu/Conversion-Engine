@@ -31,9 +31,11 @@ from signal_pipeline.models import (
     CompetitorGapBrief,
     FundingEvent,
     HiringSignalBrief,
+    HiringVelocity,
     LayoffEvent,
     LeadershipChange,
     TechStack,
+    VelocityLabel,
 )
 
 logger = logging.getLogger(__name__)
@@ -63,7 +65,11 @@ _DATA_TOOL_KEYWORDS: frozenset[str] = frozenset(
     ]
 )
 
-# Path to bench summary relative to the project root
+# Authoritative seed bench summary; falls back to legacy path
+_SEED_BENCH_PATH = (
+    Path(__file__).parent.parent
+    / "data" / "tenacious_sales_data" / "seed" / "bench_summary.json"
+)
 _BENCH_SUMMARY_PATH = Path(__file__).parent.parent / "data" / "bench_summary.json"
 
 
@@ -106,25 +112,17 @@ class AssemblerInput:
 # ---------------------------------------------------------------------------
 
 
-def _load_bench_summary(path: Path = _BENCH_SUMMARY_PATH) -> dict:
-    """
-    Load and return the bench summary JSON from disk.
-
-    Returns an empty dict if the file is missing or unparseable, logging a
-    warning in that case.
-
-    Args:
-        path: Filesystem path to bench_summary.json.
-
-    Returns:
-        Parsed bench summary dict, or {} on failure.
-    """
-    try:
-        with path.open(encoding="utf-8") as fh:
-            return json.load(fh)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to load bench_summary.json from %s: %s", path, exc)
-        return {}
+def _load_bench_summary() -> dict:
+    """Load bench summary JSON, preferring the authoritative seed file."""
+    for path in (_SEED_BENCH_PATH, _BENCH_SUMMARY_PATH):
+        try:
+            with path.open(encoding="utf-8") as fh:
+                return json.load(fh)
+        except FileNotFoundError:
+            continue
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to load bench_summary from %s: %s", path, exc)
+    return {}
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +242,57 @@ def _build_tech_stack(
 
 
 # ---------------------------------------------------------------------------
+# HiringVelocity builder
+# ---------------------------------------------------------------------------
+
+
+def _compute_velocity_label(today: int, days_ago: int) -> VelocityLabel:
+    if days_ago == 0:
+        return "insufficient_signal" if today == 0 else "tripled_or_more"
+    ratio = today / days_ago
+    if ratio >= 3.0:
+        return "tripled_or_more"
+    if ratio >= 1.8:
+        return "doubled"
+    if ratio >= 1.1:
+        return "increased_modestly"
+    if ratio >= 0.9:
+        return "flat"
+    return "declined"
+
+
+def _build_hiring_velocity(job_posts: Optional["JobPostResult"]) -> Optional[HiringVelocity]:  # type: ignore[name-defined]
+    """Build HiringVelocity from JobPostResult. Returns None when no job-post data."""
+    if job_posts is None or job_posts.job_post_count is None:
+        return None
+
+    today = job_posts.job_post_count
+    # job_post_velocity_60d is always None in current scraper (no historical snapshot)
+    days_ago = 0
+    velocity_label: VelocityLabel = "insufficient_signal"
+    signal_confidence = 0.3  # low confidence since we have no 60-day baseline
+
+    if job_posts.job_post_velocity_60d is not None:
+        days_ago = int(job_posts.job_post_velocity_60d)
+        velocity_label = _compute_velocity_label(today, days_ago)
+        signal_confidence = {"high": 0.85, "medium": 0.65, "low": 0.4}.get(
+            job_posts.job_post_confidence or "low", 0.4
+        )
+
+    sources = [s for s in (job_posts.sources_checked or []) if s in {
+        "builtin", "wellfound", "linkedin_public", "company_careers_page"
+    }]
+
+    return HiringVelocity(
+        open_roles_today=today,
+        open_roles_60_days_ago=days_ago,
+        velocity_label=velocity_label,
+        signal_confidence=signal_confidence,
+        sources=sources,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Bench mismatch helper
 # ---------------------------------------------------------------------------
 
@@ -274,7 +323,19 @@ def _compute_bench_mismatch(
     if not prospect_stacks:
         return None
 
-    bench_stacks = {k.lower() for k, v in available_engineers.items() if v and v > 0}
+    bench_stacks: set[str] = set()
+    for k, v in available_engineers.items():
+        # Seed schema: v is a dict with junior/mid/senior counts
+        if isinstance(v, dict):
+            total = sum(
+                v.get(lvl, 0) or 0 for lvl in ("junior", "mid", "senior")
+            )
+            if total > 0:
+                bench_stacks.add(k.lower())
+                for skill in v.get("skills", []):
+                    bench_stacks.add(skill.lower())
+        elif isinstance(v, int) and v > 0:
+            bench_stacks.add(k.lower())
     has_match = bool(prospect_stacks & bench_stacks)
     return not has_match
 
@@ -408,8 +469,8 @@ class HiringSignalBriefAssembler:
                                   or Langfuse when this is raised.
         """
         bench = _load_bench_summary()
-        bench_version: Optional[str] = bench.get("version")
-        available_engineers: dict = bench.get("available_engineers", {})
+        bench_version: Optional[str] = bench.get("as_of")
+        available_engineers: dict = bench.get("stacks", bench.get("available_engineers", {}))
 
         tech_stack = _build_tech_stack(inputs.firmographic, inputs.job_posts)
         bench_mismatch = _compute_bench_mismatch(tech_stack, available_engineers)
@@ -417,6 +478,8 @@ class HiringSignalBriefAssembler:
         funding_event = _build_funding_event(inputs.funding)
         layoff_event = _build_layoff_event(inputs.layoff)
         leadership_change = _build_leadership_change(inputs.leadership)
+
+        hiring_velocity = _build_hiring_velocity(inputs.job_posts)
 
         job_post_count: Optional[int] = None
         job_post_velocity_60d: Optional[float] = None
@@ -444,6 +507,7 @@ class HiringSignalBriefAssembler:
             "bench_summary_version": bench_version,
             "bench_mismatch": bench_mismatch,
             "tech_stack": tech_stack.model_dump() if tech_stack is not None else None,
+            "hiring_velocity": hiring_velocity.model_dump() if hiring_velocity is not None else None,
             "funding_event": funding_event.model_dump() if funding_event is not None else None,
             "layoff_event": layoff_event.model_dump() if layoff_event is not None else None,
             "job_post_count": job_post_count,
@@ -460,6 +524,8 @@ class HiringSignalBriefAssembler:
             "icp_segment": None,
             "icp_confidence": None,
             "icp_signals_used": [],
+            "employee_count_min": inputs.firmographic.employee_count_min,
+            "employee_count_max": inputs.firmographic.employee_count_max,
         }
 
         try:

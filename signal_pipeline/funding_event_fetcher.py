@@ -157,23 +157,31 @@ class FundingEventFetcher:
         self,
         raw_funding_rounds: list[dict],
         reference_date: Optional[date] = None,
+        ignore_date_window: Optional[bool] = None,
     ) -> FundingEventResult:
         """
-        Return the most recent funding event within the last 180 days.
+        Return the most recent funding event.
 
         Args:
             raw_funding_rounds: List of funding round dicts from
                                 FirmographicResult.raw_funding_rounds.
             reference_date: Date to measure the 180-day window from.
                             Defaults to today (UTC).
+            ignore_date_window: When True, returns the most recent event
+                                regardless of how old it is. Defaults to
+                                ICP_IGNORE_DATES env var ("true" by default).
 
         Returns:
             FundingEventResult with detected=True and populated fields when a
             matching round is found; detected=False with all fields None when
-            no round falls within the window.
+            no round is available.
         """
         if not raw_funding_rounds:
             return _NO_EVENT
+
+        if ignore_date_window is None:
+            import os
+            ignore_date_window = os.environ.get("ICP_IGNORE_DATES", "true").lower() == "true"
 
         ref = reference_date or date.today()
         window_start = ref - timedelta(days=self.WINDOW_DAYS)
@@ -183,7 +191,8 @@ class FundingEventFetcher:
             announced_on = _parse_date(round_dict.get("announced_on", ""))
             if announced_on is None:
                 continue
-            if announced_on < window_start or announced_on > ref:
+            # Skip window filter when ignore_date_window is set (static datasets)
+            if not ignore_date_window and (announced_on < window_start or announced_on > ref):
                 continue
             candidates.append((announced_on, round_dict))
 
