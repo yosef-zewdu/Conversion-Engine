@@ -5,47 +5,75 @@ import os
 from pathlib import Path
 from agent.agent import ConversationAgent
 
+from dotenv import load_dotenv
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("dispatch_outreach")
 
+# Load environment variables for Langfuse/OpenRouter/HubSpot
+load_dotenv()
+
+from sqlalchemy import select
+from db.session import AsyncSessionLocal
+from db.models import Lead, Event
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("dispatch_outreach")
+
+# Load environment variables for Langfuse/OpenRouter/HubSpot
+load_dotenv()
+
 async def dispatch():
-    queue_path = Path("runs/outreach_queue.jsonl")
-    if not queue_path.exists():
-        logger.error("No outreach queue found at %s", queue_path)
-        return
+    async with AsyncSessionLocal() as db:
+        # 1. Fetch leads in 'cold' state
+        result = await db.execute(
+            select(Lead).where(Lead.current_state == "cold")
+        )
+        leads = result.scalars().all()
 
-    agent = ConversationAgent()
-    
-    # Read the queue
-    with open(queue_path, "r") as f:
-        prospects = [json.loads(line) for line in f if line.strip()]
+        if not leads:
+            logger.info("No cold leads found in the database. Queue is empty.")
+            return
 
-    if not prospects:
-        logger.info("Outreach queue is empty.")
-        return
+        logger.info("Processing %d cold leads from the database...", len(leads))
 
-    logger.info("Processing %d prospects from queue...", len(prospects))
 
-    for p in prospects:
-        email = p.get("email")
-        company = p.get("company_name")
-        logger.info("Starting outreach for %s (%s)", company, email)
-        
-        try:
-            # Trigger the ConversationAgent with an empty inbound
-            # This will trigger the 'First Outreach' logic in the graph
-            result = await agent.handle(
-                prospect_dict=p,
-                inbound_text="",  # Empty triggers outbound start
-                channel=p.get("preferred_channel", "email")
-            )
+        for lead in leads:
+            logger.info("Starting outreach for %s (%s)", lead.company_name, lead.email)
             
-            logger.info("Outreach draft generated for %s: %s", company, result.get("segment"))
-            if result.get("reply_text"):
-                logger.info("Reply text preview: %s...", result.get("reply_text")[:100])
-            
-        except Exception as e:
-            logger.error("Failed to seed outreach for %s: %s", company, e)
+            try:
+                # Convert Lead ORM model to the prospect dict the agent expects
+                from webhooks.utils import lead_to_prospect_dict
+                prospect_dict = lead_to_prospect_dict(lead)
+
+                # Trigger the ConversationAgent via the run_agent bridge
+                from webhooks.agent_runner import run_agent
+                result = await run_agent(
+                    prospect_dict=prospect_dict,
+                    inbound_text="",  # Empty triggers outbound start
+                    channel=lead.preferred_channel or "email"
+                )
+                
+                if result:
+                    logger.info("Outreach draft generated for %s: %s", lead.company_name, result.get("intent"))
+                    
+                    # 2. Update lead state to avoid duplicate dispatch
+                    lead.current_state = "contacted"
+                
+                # Log an event
+                outbound_event = Event(
+                    lead_id=lead.id,
+                    event_type="outbound_dispatched",
+                    payload={"channel": lead.preferred_channel}
+                )
+                db.add(outbound_event)
+                
+            except Exception as e:
+                logger.error("Failed to seed outreach for %s: %s", lead.company_name, e)
+
+        # Commit all state updates
+        await db.commit()
+        logger.info("Finished processing all leads.")
 
 if __name__ == "__main__":
     asyncio.run(dispatch())
