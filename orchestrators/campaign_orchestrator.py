@@ -111,7 +111,7 @@ class CampaignOrchestrator:
                     enriched_batch = await self._enrich_accounts([candidate])
                     if not enriched_batch: continue
                     
-                    scored_batch = self._score_accounts(enriched_batch, tenacious_ctx)
+                    scored_batch = self._score_and_rank(enriched_batch)
                     qualified_batch = self._qualify(scored_batch, campaign_config)
                     if not qualified_batch: continue
                     
