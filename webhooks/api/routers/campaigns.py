@@ -145,3 +145,17 @@ async def get_campaign_accounts(
     )
     leads = result.scalars().all()
     return [lead_summary(l) for l in leads]
+
+@router.delete("/{campaign_run_id}")
+async def delete_campaign(
+    campaign_run_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    """Delete a campaign run and all its associated leads/data."""
+    campaign = await db.get(Campaign, campaign_run_id)
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    
+    await db.delete(campaign)
+    await db.commit()
+    return {"message": f"Campaign {campaign_run_id} and all related data deleted successfully"}
