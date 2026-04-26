@@ -13,6 +13,7 @@ export default function CampaignsPage() {
     limit: 10,
     mode: 'staff_sink',
     first_channel: 'email',
+    auto_outreach: false,
   });
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
@@ -92,15 +93,18 @@ export default function CampaignsPage() {
                 </select>
               </div>
               <div className="space-y-2">
-                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-widest pl-1">First Channel</label>
+                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-widest pl-1">Autonomy Level</label>
                 <select
                   className="w-full bg-slate-950/50 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500/50 transition-all appearance-none"
-                  value={form.first_channel}
-                  onChange={(e) => setForm((f) => ({ ...f, first_channel: e.target.value }))}
+                  value={form.auto_outreach}
+                  onChange={(e) => setForm((f) => ({ ...f, auto_outreach: e.target.value === 'true' }))}
                 >
-                  <option value="email">Email Sequence</option>
-                  <option value="sms">SMS Sequence</option>
+                  <option value="false">Human-in-the-Loop</option>
+                  <option value="true">Fully Autonomous</option>
                 </select>
+                <p className="text-[10px] text-slate-500 italic px-1">
+                  {form.auto_outreach ? 'Automatically sends messages after qualification' : 'Wait for manual approval before sending'}
+                </p>
               </div>
             </div>
           </div>
