@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import logging
-from fastapi import FastAPI, Response, status
+from fastapi import FastAPI, Response, status, Header, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from db.session import init_db
@@ -15,9 +15,24 @@ from webhooks.api.routers import webhooks, campaigns, leads, dev, traces
 
 logger = logging.getLogger(__name__)
 
+# Security gate
+async def verify_api_key(request: Request, x_api_key: str = Header(None)):
+    if request.method == "GET":
+        # Public read access
+        return
+        
+    admin_key = os.environ.get("ADMIN_API_KEY")
+    if not admin_key:
+        return
+        
+    if x_api_key != admin_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Admin Key required for this action"
+        )
+
 app = FastAPI(title="Conversion Engine Operator API")
 
-# Allow frontend dev server (localhost:5173 Vite default + any Render/Vercel origin)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -32,16 +47,16 @@ async def _startup() -> None:
     logger.info("Conversion Engine database initialized.")
 
 @app.get("/health")
-async def health() -> dict[str, str]:
+async def health(auth: None = Depends(verify_api_key)) -> dict[str, str]:
     return {"status": "ok"}
 
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon() -> Response:
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-# Include all routers
-app.include_router(webhooks.router)
-app.include_router(campaigns.router)
-app.include_router(leads.router)
-app.include_router(dev.router)
-app.include_router(traces.router)
+# Include all routers with security check
+app.include_router(webhooks.router, dependencies=[Depends(verify_api_key)])
+app.include_router(campaigns.router, dependencies=[Depends(verify_api_key)])
+app.include_router(leads.router, dependencies=[Depends(verify_api_key)])
+app.include_router(dev.router, dependencies=[Depends(verify_api_key)])
+app.include_router(traces.router, dependencies=[Depends(verify_api_key)])
