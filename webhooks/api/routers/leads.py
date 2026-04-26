@@ -120,10 +120,39 @@ async def get_lead_messages(
     lead_id: str,
     db: AsyncSession = Depends(get_db),
 ) -> list[dict[str, Any]]:
-    result = await db.execute(
-        select(Message).where(Message.lead_id == lead_id).order_by(Message.sent_at)
+    # Fetch actual messages
+    msg_result = await db.execute(
+        select(Message).where(Message.lead_id == lead_id)
     )
-    return [message_to_dict(m) for m in result.scalars().all()]
+    messages = [message_to_dict(m) for m in msg_result.scalars().all()]
+
+    # Fetch significant events to inject into timeline (e.g. bookings)
+    evt_result = await db.execute(
+        select(Event).where(
+            Event.lead_id == lead_id,
+            Event.event_type.in_(["booking_created", "outreach_started", "outbound_dispatched"])
+        )
+    )
+    
+    events = []
+    for e in evt_result.scalars().all():
+        events.append({
+            "id": f"evt_{e.id}",
+            "lead_id": e.lead_id,
+            "direction": "system",
+            "channel": (e.payload or {}).get("channel", "system"),
+            "body": f"System Event: {e.event_type.replace('_', ' ').title()}",
+            "event_type": e.event_type,
+            "sent_at": e.occurred_at.isoformat() if e.occurred_at else None,  # ← was e.created_at (doesn't exist)
+            "payload": e.payload
+        })
+
+    # Combine and sort chronologically (null-safe)
+    timeline = messages + events
+    sentinel = datetime.min.replace(tzinfo=timezone.utc).isoformat()
+    timeline.sort(key=lambda x: x["sent_at"] or sentinel)
+    
+    return timeline
 
 @router.get("/{lead_id}/traces")
 async def get_lead_traces(

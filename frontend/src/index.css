@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Outfit", "Inter", system-ui, sans-serif;
+  --color-brand-primary: #6366f1;
+  --color-brand-secondary: #a855f7;
+}
+
+@layer base {
+  body {
+    @apply bg-slate-950 text-slate-100 antialiased;
+    background-image: 
+      radial-gradient(at 0% 0%, rgba(99, 102, 241, 0.15) 0px, transparent 50%),
+      radial-gradient(at 100% 100%, rgba(168, 85, 247, 0.1) 0px, transparent 50%);
+    background-attachment: fixed;
+  }
+}
+
+@layer components {
+  .glass-card {
+    @apply bg-slate-900/50 backdrop-blur-md border border-slate-800 rounded-2xl shadow-xl transition-all duration-300;
+  }
+  
+  .glass-card:hover {
+    @apply border-slate-700 shadow-indigo-500/10;
+  }
+
+  .btn-primary {
+    @apply bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2.5 rounded-xl font-semibold shadow-lg shadow-indigo-500/20 active:scale-95 transition-all disabled:opacity-50 disabled:pointer-events-none;
+  }
+
+  .nav-link {
+    @apply px-4 py-1.5 rounded-full text-sm font-medium transition-all duration-200;
+  }
+
+  .nav-link-active {
+    @apply bg-indigo-600/10 text-indigo-400 ring-1 ring-indigo-500/30 shadow-[0_0_15px_rgba(99,102,241,0.2)];
+  }
+
+  .nav-link-inactive {
+    @apply text-slate-400 hover:text-slate-100 hover:bg-white/5;
+  }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-slate-800 rounded-full hover:bg-slate-700 transition-colors;
+}

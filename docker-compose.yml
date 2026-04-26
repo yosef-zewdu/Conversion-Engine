@@ -3,4 +3,23 @@
 # Cal.com: using cloud API (https://cal.com) — no local container needed.
 #   CAL_API_KEY and CAL_BASE_URL=https://api.cal.com are set in .env
 #
-# Add any future local services (e.g. Redis, local LLM proxy) here.
+# Postgres: operator store for leads, campaigns, messages, events, traces.
+#   Defaults to SQLite (conversion_engine.db) when DATABASE_URL is not set.
+
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: conversion_engine
+      POSTGRES_USER: ceuser
+      POSTGRES_PASSWORD: cepass
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:

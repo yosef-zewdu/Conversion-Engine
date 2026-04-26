@@ -302,27 +302,26 @@ async def node_llm(state: AgentState) -> dict:
     system_prompt = _build_system_prompt(state)
     messages = [SystemMessage(content=system_prompt)] + list(state.get("messages") or [])
 
-    # Emit Langfuse trace for this LLM call (Req 11.1)
-    lf_trace = None
+    # Langfuse Traceability (Req 11.1)
+    callbacks = []
     try:
-        from langfuse import Langfuse
-        lf = Langfuse(
-            public_key=os.environ.get("LANGFUSE_PUBLIC_KEY", ""),
-            secret_key=os.environ.get("LANGFUSE_SECRET_KEY", ""),
+        from langfuse.callback import CallbackHandler
+        handler = CallbackHandler(
+            public_key=os.environ.get("LANGFUSE_PUBLIC_KEY"),
+            secret_key=os.environ.get("LANGFUSE_SECRET_KEY"),
             host=os.environ.get("LANGFUSE_BASE_URL", "https://cloud.langfuse.com"),
         )
-        lf_trace = lf.trace(
-            name="llm_call",
-            input={"messages_count": len(messages)},
-            metadata={"model": os.environ.get("OPENROUTER_MODEL", ""), "node": "node_llm"},
-        )
-    except Exception:
-        pass
+        callbacks.append(handler)
+    except Exception as exc:
+        logger.warning("Langfuse callback initialization failed: %s", exc)
 
     try:
         import time
         t0 = time.monotonic()
-        response = await llm.ainvoke(messages)
+        
+        # Invoke LLM with Langfuse callbacks
+        response = await llm.ainvoke(messages, config={"callbacks": callbacks})
+        
         latency_ms = int((time.monotonic() - t0) * 1000)
 
         usage = getattr(response, "usage_metadata", None) or {}
@@ -330,17 +329,6 @@ async def node_llm(state: AgentState) -> dict:
         completion_tokens = getattr(usage, "output_tokens", None) or (usage.get("output_tokens") if isinstance(usage, dict) else 0) or 0
         model = os.environ.get("OPENROUTER_MODEL", "_default")
         guard.record(prompt_tokens, completion_tokens, model)
-
-        # Update Langfuse trace with output
-        if lf_trace:
-            try:
-                lf_trace.update(
-                    output={"content_len": len(str(response.content)), "latency_ms": latency_ms},
-                    metadata={"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens},
-                )
-                lf.flush()
-            except Exception:
-                pass
 
         logger.info(
             "LLM: latency=%dms prompt_tokens=%d completion_tokens=%d budget=$%.4f",
