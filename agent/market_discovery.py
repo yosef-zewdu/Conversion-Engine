@@ -37,6 +37,10 @@ class MarketDiscoveryAgent:
     Returns empty candidate_accounts (never raises) when no matches found.
     """
 
+    # Class-level caches to avoid re-reading disk on every campaign run
+    _CB_CACHE: list[dict] = []
+    _LAYOFF_CACHE: list[dict] = []
+
     def __init__(
         self,
         crunchbase_path: str = _DEFAULT_CB_PATH,
@@ -177,26 +181,32 @@ class MarketDiscoveryAgent:
         within_days: int,
     ) -> list[dict]:
         """Scan Crunchbase ODM CSV files for matching companies."""
+        if not self._CB_CACHE:
+            logger.info("MarketDiscoveryAgent: Loading crunchbase data into memory...")
+            csv_files = self._find_csv_files(self._cb_path)
+            for csv_file in csv_files:
+                try:
+                    with open(csv_file, encoding="utf-8", errors="replace") as f:
+                        reader = csv.DictReader(f)
+                        for i, row in enumerate(reader):
+                            # Store the raw row in cache
+                            self._CB_CACHE.append({
+                                "row": row,
+                                "file": csv_file,
+                                "row_num": i + 2
+                            })
+                except Exception as exc:
+                    logger.warning("Skipping %s: %s", csv_file, exc)
+
         results: list[dict] = []
         now = datetime.now(timezone.utc)
-
-        csv_files = self._find_csv_files(self._cb_path)
-        logger.warning("MarketDiscoveryAgent scanning crunchbase for candidates at path: %s", self._cb_path)
-        logger.warning("Found %d CSV files: %s", len(csv_files), csv_files)
-        
-        for csv_file in csv_files:
-            try:
-                with open(csv_file, encoding="utf-8", errors="replace") as f:
-                    reader = csv.DictReader(f)
-                    for i, row in enumerate(reader):
-                        candidate = self._row_to_candidate(
-                            row, csv_file, i + 2,
-                            min_emp, max_emp, allowed_rounds, min_amount, max_amount, within_days, now
-                        )
-                        if candidate:
-                            results.append(candidate)
-            except Exception as exc:
-                logger.warning("Skipping %s: %s", csv_file, exc)
+        for item in self._CB_CACHE:
+            candidate = self._row_to_candidate(
+                item["row"], item["file"], item["row_num"],
+                min_emp, max_emp, allowed_rounds, min_amount, max_amount, within_days, now
+            )
+            if candidate:
+                results.append(candidate)
 
         return results
 
