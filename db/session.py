@@ -17,9 +17,11 @@ _DATABASE_URL: str = os.environ.get(
     "sqlite+aiosqlite:///./conversion_engine.db",
 )
 
-# Replace postgres:// with postgresql+asyncpg:// for Render compatibility
+# Replace postgres:// or postgresql:// with postgresql+asyncpg:// for async Python compatibility
 if _DATABASE_URL.startswith("postgres://"):
     _DATABASE_URL = _DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
+elif _DATABASE_URL.startswith("postgresql://"):
+    _DATABASE_URL = _DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
 
 engine = create_async_engine(
     _DATABASE_URL,
