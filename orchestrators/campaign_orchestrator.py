@@ -60,17 +60,19 @@ class CampaignOrchestrator:
         result = orchestrator.run(campaign_config)
     """
 
-    async def run(self, campaign_config: dict) -> dict:
+    async def run(self, campaign_config: dict, run_id: str | None = None, on_lead: Callable | None = None) -> dict[str, Any]:
         """
         Execute a full campaign run.
 
         Args:
             campaign_config: Dict parsed from campaign YAML or POST body.
+            run_id: Optional existing run_id to use. If None, one will be generated.
+            on_lead: Optional async callback called for each qualified lead.
 
         Returns:
             CampaignRun as dict with counts and qualified_accounts_path.
         """
-        run_id = f"camp_{uuid.uuid4().hex[:8]}"
+        run_id = run_id or f"camp_{uuid.uuid4().hex[:8]}"
         campaign_id = campaign_config.get("campaign_id", "unnamed")
         now = datetime.now(timezone.utc).isoformat()
 
@@ -89,45 +91,53 @@ class CampaignOrchestrator:
             logger.info("Campaign %s: discovering candidate accounts", run_id)
             discovery_result = self._discover(campaign_config)
             all_candidates = discovery_result.get("candidate_accounts", [])
-            campaign_run.candidate_count = len(all_candidates)
             
             # Apply budgeting limit to control enrichment costs
             limit = campaign_config.get("limit", 10)
             candidates = all_candidates[:limit]
             campaign_run.candidate_count = len(candidates)
             
-            logger.info("Campaign %s: found %d total potential matches, limiting to %d for processing", run_id, len(all_candidates), len(candidates))
+            logger.info("Campaign %s: found %d total, limiting to %d", run_id, len(all_candidates), len(candidates))
 
             if not candidates:
                 campaign_run.status = "no_candidates"
                 return asdict(campaign_run)
 
-            # Step 3: Enrich accounts
-            logger.info("Campaign %s: enriching accounts", run_id)
-            enriched = await self._enrich_accounts(candidates)
+            # Process candidates one by one for streaming support
+            qualified_accounts = []
+            for candidate in candidates:
+                try:
+                    # Enrich + Score + Brief for ONE lead
+                    enriched_batch = await self._enrich_accounts([candidate])
+                    if not enriched_batch: continue
+                    
+                    scored_batch = self._score_accounts(enriched_batch, tenacious_ctx)
+                    qualified_batch = self._qualify(scored_batch, campaign_config)
+                    if not qualified_batch: continue
+                    
+                    briefed_batch = self._generate_briefs(qualified_batch)
+                    contacted_batch = self._create_synthetic_contacts(briefed_batch)
+                    
+                    if contacted_batch:
+                        final_account = contacted_batch[0]
+                        qualified_accounts.append(final_account)
+                        
+                        # Trigger streaming callback
+                        if on_lead:
+                            import asyncio
+                            if asyncio.iscoroutinefunction(on_lead):
+                                await on_lead(final_account)
+                            else:
+                                on_lead(final_account)
+                                
+                except Exception as e:
+                    logger.warning("Failed to process candidate in campaign %s: %s", run_id, e)
 
-            # Step 4: Score and rank
-            logger.info("Campaign %s: scoring accounts", run_id)
-            scored = self._score_and_rank(enriched)
-
-            # Step 5: Qualify accounts
-            logger.info("Campaign %s: qualifying accounts", run_id)
-            qualified = self._qualify(scored, campaign_config)
-            campaign_run.qualified_count = len(qualified)
-            logger.info("Campaign %s: %d qualified", run_id, len(qualified))
-
-            # Step 6: Generate briefs + synthetic contacts
-            logger.info("Campaign %s: generating briefs", run_id)
-            accounts_with_briefs = self._generate_briefs(qualified)
-            accounts_with_contacts = self._create_synthetic_contacts(accounts_with_briefs)
-
-            # Step 7: Save qualified accounts
-            output_path = self._save_qualified_accounts(run_id, accounts_with_contacts)
+            # Final Save
+            output_path = self._save_qualified_accounts(run_id, qualified_accounts)
             campaign_run.qualified_accounts_path = str(output_path)
-
-            # Step 8: Queue outreach
-            outreach_count = self._queue_outreach(accounts_with_contacts, campaign_config)
-            campaign_run.queued_outreach_count = outreach_count
+            campaign_run.qualified_count = len(qualified_accounts)
+            campaign_run.queued_outreach_count = len(qualified_accounts)
             campaign_run.status = "complete"
             
             return asdict(campaign_run)
@@ -347,45 +357,3 @@ class CampaignOrchestrator:
 
         logger.info("Saved %d qualified accounts to %s", len(accounts), output)
         return output
-
-    def _queue_outreach(self, accounts: list[dict], campaign_config: dict) -> int:
-        """
-        Queue outreach for each qualified account.
-
-        In the current implementation this writes a queue manifest to disk.
-        The webhook handler / ConversationAgent picks it up on next startup,
-        or it can be consumed by a background task.
-        """
-        outreach_channel = (campaign_config.get("outreach") or {}).get(
-            "first_channel", "email"
-        )
-
-        queued: list[dict] = []
-        for account in accounts:
-            contact = account.get("synthetic_contact") or {}
-            icp = account.get("icp_result") or {}
-            queued.append({
-                "prospect_id": str(uuid.uuid4()),
-                "company_id": account.get("crunchbase_id", ""),
-                "company_name": account.get("company_name", ""),
-                "contact_name": contact.get("contact_name", ""),
-                "email": contact.get("email", ""),
-                "phone": contact.get("phone"),
-                "timezone": contact.get("timezone", "UTC"),
-                "preferred_channel": outreach_channel,
-                "current_state": "cold",
-                "outbound_attempt_count": 0,
-                "segment": icp.get("segment"),
-                "icp_confidence": icp.get("confidence"),
-                "source_refs": account.get("source_refs", {}),
-                "queued_at": datetime.now(timezone.utc).isoformat(),
-            })
-
-        if queued:
-            queue_path = Path("runs") / "outreach_queue.jsonl"
-            queue_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(queue_path, "a") as f:
-                for item in queued:
-                    f.write(json.dumps(item) + "\n")
-
-        return len(queued)

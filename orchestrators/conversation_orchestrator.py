@@ -23,9 +23,11 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Any
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
+load_dotenv()
 
 class ConversationOrchestrator:
     """
@@ -171,6 +173,10 @@ class ConversationOrchestrator:
             },
             "crm_write_status": crm_status,
             "action_taken": "sent",
+            "prospect": state.get("prospect"),
+            "segment": state.get("segment"),
+            "destination": state.get("destination"),
+            "briefs": briefs,
         }
 
     # ── Private helpers ───────────────────────────────────────────────────────
@@ -391,18 +397,49 @@ class ConversationOrchestrator:
 
             # CRM writes bypass kill switch — internal records only
             from crm_writer.writer import CRMWriter
+            from config.models import Prospect, ProspectState, Segment
 
             writer = CRMWriter()
-            prospect = state.get("prospect") or {}
-            email = prospect.get("email", "")
-            if email:
-                await writer.upsert_contact(
-                    email=email,
-                    properties=crm_payload["contact_properties"],
-                )
+            prospect_dict = state.get("prospect") or {}
+            
+            # Reconstruct Prospect object for the writer
+            prospect = Prospect(
+                prospect_id=prospect_dict.get("prospect_id", "unknown"),
+                company_id=prospect_dict.get("company_id", "unknown"),
+                contact_name=prospect_dict.get("contact_name", ""),
+                email=prospect_dict.get("email", ""),
+                phone=prospect_dict.get("phone"),
+                timezone=prospect_dict.get("timezone", "UTC"),
+                preferred_channel=prospect_dict.get("preferred_channel", "email"),
+                current_state=ProspectState(state.get("lifecycle_stage", "cold")),
+                outbound_attempt_count=prospect_dict.get("outbound_attempt_count", 0),
+                segment=Segment(state.get("segment")) if state.get("segment") else None,
+            )
+
+            # 1. Upsert contact with new properties (segment, maturity, etc.)
+            hs_id = await writer.upsert_contact(prospect)
+            
+            # 2. Log the activity (the reply or the seed outreach)
+            if tool_results:
+                for tr in tool_results:
+                    await writer.log_activity({
+                        "type": tr.get("tool_name", "outbound_email"),
+                        "prospect_id": prospect.prospect_id,
+                        "channel": state.get("channel", "email"),
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "content": crm_payload["timeline_note"]["body"],
+                        "direction": "outbound"
+                    }, hs_contact_id=hs_id)
+
+            # 3. Write briefs if they've changed
+            hiring_brief = state.get("hiring_signal_brief")
+            if hiring_brief:
+                from signal_pipeline.models import HiringSignalBrief
+                await writer.write_brief(HiringSignalBrief(**hiring_brief), hs_contact_id=hs_id)
+
             return "ok"
         except Exception as exc:
-            logger.warning("CRM write failed: %s", exc)
+            logger.warning("CRM write failed: %s", exc, exc_info=True)
             return f"failed: {exc}"
 
     def _write_trace(
