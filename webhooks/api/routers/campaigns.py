@@ -21,6 +21,7 @@ router = APIRouter(prefix="/campaigns", tags=["campaigns"])
 
 async def background_campaign_task(run_id: str, config: dict):
     """Background worker to run the campaign and persist leads to DB incrementally."""
+    logger.info("Campaign task started: run_id=%s auto_outreach=%s", run_id, config.get("auto_outreach"))
     try:
         async def on_lead_callback(account_data: dict):
             """Persist a single lead to DB, then trigger outreach if autonomous mode."""
@@ -65,6 +66,7 @@ async def background_campaign_task(run_id: str, config: dict):
                 await db.commit()
 
             # Auto-outreach: run agent and persist results, same as POST /leads/{id}/start-outreach
+            logger.info("on_lead_callback: lead_id=%s auto_outreach=%s", lead_id, config.get("auto_outreach"))
             if config.get("auto_outreach"):
                 try:
                     async with AsyncSessionLocal() as db:
