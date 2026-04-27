@@ -46,9 +46,6 @@ async def get_prospect_by_email(db: AsyncSession, email: str) -> dict[str, Any] 
     result = await db.execute(select(Lead).where(Lead.email == email))
     lead = result.scalars().first()
     if not lead:
-        demo_email = os.environ.get("STAFF_SINK_EMAIL", "demo@tenacious-sandbox.dev")
-        if email.lower() == demo_email.lower():
-            return create_demo_prospect_dict()
         return None
     return lead_to_prospect_dict(lead)
 
@@ -60,11 +57,6 @@ async def get_prospect_by_phone(db: AsyncSession, phone: str) -> dict[str, Any] 
     lead = result.scalars().first()
     if lead:
         return lead_to_prospect_dict(lead)
-
-    demo_phone = os.environ.get("STAFF_SINK_PHONE", "")
-    if stripped and demo_phone and (stripped in demo_phone or demo_phone in stripped):
-        return create_demo_prospect_dict()
-
     return None
 
 def campaign_to_dict(c: Campaign) -> dict[str, Any]:

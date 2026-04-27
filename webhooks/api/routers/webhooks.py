@@ -78,14 +78,25 @@ async def handle_email_reply(
             prospect = await get_prospect_by_id(db, pid_from_subject)
             logger.info("email webhook: subject lookup pid=%s found=%s", pid_from_subject, bool(prospect))
 
+    # Only look up by `to` if the address is NOT the staff sink.
+    # When Resend delivers our own outbound to the staff sink, it fires email.received —
+    # we must not treat that delivery as a prospect reply.
+    import os as _os
+    _staff_sink = (_os.environ.get("STAFF_SINK_EMAIL") or "").lower()
     if not prospect:
         for addr in to_list:
+            if _staff_sink and addr.lower() == _staff_sink:
+                logger.info("email webhook: to-addr is staff sink (%s) — skipping to-addr lookup", addr)
+                continue
             prospect = await get_prospect_by_email(db, addr)
             if prospect:
                 logger.info("email webhook: to-addr lookup addr=%s found lead", addr)
                 break
 
     if not prospect and from_email:
+        if _staff_sink and from_email.lower() == _staff_sink:
+            logger.info("email webhook: from-email is staff sink — skipping (our own outbound delivery)")
+            return {"received": "ok", "note": "staff sink delivery — ignored"}
         prospect = await get_prospect_by_email(db, from_email)
         logger.info("email webhook: from-email lookup addr=%s found=%s", from_email, bool(prospect))
 
@@ -183,14 +194,22 @@ async def _handle_inbound_email(request: Request, db: AsyncSession) -> dict[str,
         prospect = await get_prospect_by_id(db, prospect_id)
         logger.info("inbound email: subject lookup pid=%s found=%s", prospect_id, bool(prospect))
 
+    import os as _os
+    _staff_sink = (_os.environ.get("STAFF_SINK_EMAIL") or "").lower()
     if not prospect:
         for addr in to_list:
+            if _staff_sink and addr.lower() == _staff_sink:
+                logger.info("inbound email: to-addr is staff sink (%s) — skipping", addr)
+                continue
             prospect = await get_prospect_by_email(db, addr)
             if prospect:
                 logger.info("inbound email: to-addr lookup addr=%s matched", addr)
                 break
 
     if not prospect and from_email:
+        if _staff_sink and from_email.lower() == _staff_sink:
+            logger.info("inbound email: from-email is staff sink — our own outbound delivery, ignoring")
+            return {"received": "ok", "note": "staff sink delivery — ignored"}
         prospect = await get_prospect_by_email(db, from_email)
         logger.info("inbound email: from-email lookup addr=%s found=%s", from_email, bool(prospect))
 
