@@ -164,6 +164,18 @@ async def get_lead_messages(
     
     return timeline
 
+@router.delete("/{lead_id}")
+async def delete_lead(
+    lead_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    lead = await db.get(Lead, lead_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="lead not found")
+    await db.delete(lead)
+    await db.commit()
+    return {"message": f"Lead {lead_id} deleted"}
+
 @router.get("/{lead_id}/traces")
 async def get_lead_traces(
     lead_id: str,

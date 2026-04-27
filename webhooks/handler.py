@@ -50,9 +50,8 @@ app.add_middleware(
 async def _startup() -> None:
     await init_db()
     logger.info("Conversion Engine database initialized.")
-    import asyncio
-    from webhooks.inbox_poller import start_inbox_poller
-    asyncio.create_task(start_inbox_poller())
+    # Inbox poller disabled — /webhooks/email handles email.received in real-time.
+    # Running both causes duplicate agent calls for every inbound email.
 
 @app.get("/health")
 async def health(auth: None = Depends(verify_api_key)) -> dict[str, str]:

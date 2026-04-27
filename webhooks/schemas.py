@@ -45,8 +45,10 @@ class CampaignRunRequest(BaseModel):
     target_segments: list[str] = ["S1", "S4"]
     limit: int = 10
     mode: str = "staff_sink"
+    custom_sink_email: str = ""
     first_channel: str = "email"
     auto_outreach: bool = False
+    model: str = "qwen/qwen3-235b-a22b"
 
 class StartOutreachRequest(BaseModel):
     inbound_text: str = "Hello, I'm interested in learning more."

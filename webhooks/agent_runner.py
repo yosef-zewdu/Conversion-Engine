@@ -25,6 +25,7 @@ async def run_agent(
         "body": inbound_text,
         "event_type": "inbound_message" if inbound_text else "outbound_seed",
         "prospect": prospect_dict,
+        "model": prospect_dict.get("model", ""),
         # Briefs are usually inside the prospect_dict if pre-enriched
         "briefs": {
             "hiring_signal_brief": prospect_dict.get("hiring_signal_brief"),

@@ -62,6 +62,19 @@ async def _process_received_email(email_data: dict) -> None:
             _seen_ids.add(email_id)
             return
 
+        # Also dedup by subject+direction to catch cross-path duplicates
+        if subject:
+            existing_subj = await db.execute(
+                select(Message).where(
+                    Message.subject == subject,
+                    Message.direction == "inbound",
+                )
+            )
+            if existing_subj.scalars().first():
+                logger.debug("inbox_poller: subject already processed — skipping email_id=%s", email_id)
+                _seen_ids.add(email_id)
+                return
+
         # Prospect lookup — subject [Lead: id] is most reliable
         prospect_id = _extract_prospect_id(subject, content)
         prospect = None

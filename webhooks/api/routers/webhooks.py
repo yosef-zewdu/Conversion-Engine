@@ -97,6 +97,17 @@ async def handle_email_reply(
     lead_id = prospect.get("prospect_id")
     logger.info("email webhook: matched lead_id=%s company=%s", lead_id, prospect.get("company_name", ""))
 
+    # Dedup — skip if this subject was already processed as an inbound message
+    if lead_id and subject:
+        from sqlalchemy import select
+        from db.models import Message as _Msg
+        existing = await db.execute(
+            select(_Msg).where(_Msg.lead_id == lead_id, _Msg.subject == subject, _Msg.direction == "inbound")
+        )
+        if existing.scalars().first():
+            logger.info("email webhook: duplicate subject already processed — skipping lead_id=%s", lead_id)
+            return {"received": "ok", "note": "duplicate"}
+
     # Persist inbound message
     if lead_id and content:
         from db.models import Message

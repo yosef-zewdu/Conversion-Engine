@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models import Campaign, Event, Lead, Message, Trace
@@ -74,6 +74,8 @@ async def background_campaign_task(run_id: str, config: dict):
                         if not lead:
                             return
                         prospect = lead_to_prospect_dict(lead)
+                        prospect["custom_sink_email"] = config.get("custom_sink_email", "")
+                    prospect["model"] = config.get("model", "qwen/qwen3-235b-a22b")
 
                     result = await run_agent(prospect, "", channel="email")
 
@@ -175,8 +177,10 @@ async def run_campaign(
         "target_segments": body.target_segments,
         "limit": body.limit,
         "mode": body.mode,
+        "custom_sink_email": body.custom_sink_email,
         "outreach": {"first_channel": body.first_channel},
         "auto_outreach": body.auto_outreach,
+        "model": body.model,
     }
 
     # Create initial "Running" record
@@ -228,6 +232,31 @@ async def get_campaign_accounts(
     )
     leads = result.scalars().all()
     return [lead_summary(l) for l in leads]
+
+@router.get("/{campaign_run_id}/cost")
+async def get_campaign_cost(
+    campaign_run_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Return total LLM cost for a campaign by summing traces for all its leads."""
+    campaign = await db.get(Campaign, campaign_run_id)
+    if not campaign:
+        raise HTTPException(status_code=404, detail="campaign not found")
+
+    # Sum cost_usd across all traces for leads belonging to this campaign
+    result = await db.execute(
+        select(func.sum(Trace.cost_usd), func.count(Trace.id))
+        .join(Lead, Trace.lead_id == Lead.id)
+        .where(Lead.campaign_id == campaign_run_id)
+    )
+    row = result.one()
+    total_cost = float(row[0] or 0.0)
+    trace_count = int(row[1] or 0)
+    return {
+        "campaign_run_id": campaign_run_id,
+        "total_cost_usd": round(total_cost, 6),
+        "trace_count": trace_count,
+    }
 
 @router.delete("/{campaign_run_id}")
 async def delete_campaign(
