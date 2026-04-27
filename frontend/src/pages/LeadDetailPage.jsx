@@ -30,7 +30,11 @@ export default function LeadDetailPage() {
         setLoading(false);
       }
     }
-    if (leadId) load();
+    if (leadId) {
+      load();
+      const interval = setInterval(() => api.getLead(leadId).then(setLead).catch(() => {}), 6000);
+      return () => clearInterval(interval);
+    }
   }, [leadId]);
 
   async function handleStartOutreach() {

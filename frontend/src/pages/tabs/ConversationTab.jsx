@@ -21,19 +21,27 @@ export default function ConversationTab({ leadId, lead }) {
   const [channel, setChannel] = useState('email');
   const [simLoading, setSimLoading] = useState(false);
   const [simResult, setSimResult] = useState(null);
+  const [lastRefresh, setLastRefresh] = useState(null);
 
-  async function loadMessages() {
+  async function loadMessages(silent = false) {
+    if (!silent) setLoading(true);
     try {
       const msgs = await api.getLeadMessages(leadId);
       setMessages(msgs);
+      setLastRefresh(new Date());
     } catch (e) {
       setError(e.message);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }
 
-  useEffect(() => { loadMessages(); }, [leadId]);
+  // Initial load + poll every 5 seconds for new replies
+  useEffect(() => {
+    loadMessages();
+    const interval = setInterval(() => loadMessages(true), 5000);
+    return () => clearInterval(interval);
+  }, [leadId]);
 
   async function handleSimulate() {
     setSimLoading(true);
@@ -132,8 +140,30 @@ export default function ConversationTab({ leadId, lead }) {
       {/* Message Timeline */}
       <div className="lg:col-span-2 space-y-6">
         <div className="flex items-center justify-between px-4">
-          <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Full Message Timeline</h3>
-          {messages.length > 0 && <span className="text-[10px] font-mono text-indigo-400 font-bold">{messages.length} Events</span>}
+          <div className="flex items-center gap-3">
+            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Full Message Timeline</h3>
+            <span className="flex items-center gap-1 text-[9px] text-emerald-500 font-bold uppercase tracking-widest animate-pulse">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block"></span>
+              Live
+            </span>
+          </div>
+          <div className="flex items-center gap-3">
+            {lastRefresh && (
+              <span className="text-[10px] font-mono text-slate-600">
+                {lastRefresh.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+              </span>
+            )}
+            {messages.length > 0 && <span className="text-[10px] font-mono text-indigo-400 font-bold">{messages.length} Events</span>}
+            <button
+              onClick={() => loadMessages()}
+              className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500/40 text-slate-500 hover:text-indigo-400 transition-all"
+              title="Refresh messages"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+            </button>
+          </div>
         </div>
 
         {loading ? (
