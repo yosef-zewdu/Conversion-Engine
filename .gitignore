@@ -6,3 +6,4 @@ temp/
 __pycache__
 .hypothesis
 data/tenacious_sales_data
+runs/

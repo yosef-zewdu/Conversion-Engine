@@ -13,7 +13,7 @@ export default function CampaignsPage() {
     limit: 10,
     mode: 'staff_sink',
     first_channel: 'email',
-    auto_outreach: false,
+    auto_outreach: true,
   });
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);

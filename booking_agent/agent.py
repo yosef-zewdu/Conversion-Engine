@@ -409,6 +409,276 @@ async def create_booking(
 
 
 # ---------------------------------------------------------------------------
+# BookingAgent class
+# ---------------------------------------------------------------------------
+
+
+class BookingAgent:
+    """High-level agent that handles a slot-selection reply end-to-end."""
+
+    async def handle_slot_selection(
+        self,
+        lead_id: str,
+        inbound_text: str,
+        prospect_timezone: str = "UTC",
+    ) -> dict:
+        """
+        Given a prospect's reply expressing a time preference, find the best
+        matching Cal.com slot, create the booking, and send a confirmation email.
+
+        Returns a dict with booking status and cal_event_id.
+        """
+        from db.session import AsyncSessionLocal
+        from db.models import Lead, Message, Event
+
+        cal_config = CalConfig.from_env()
+        tz = resolve_iana_zone(prospect_timezone)
+
+        # Fetch available slots
+        try:
+            slots = await get_available_slots(cal_config, tz)
+        except Exception as exc:
+            logger.warning("get_available_slots failed: %s", exc)
+            slots = []
+
+        # Pick best slot — simple heuristic matching day/time keywords
+        slot = _pick_best_slot(inbound_text, slots)
+
+        if not slot:
+            logger.warning("No matching slot found for text=%r", inbound_text)
+            await _send_no_slot_email(lead_id, cal_config)
+            return {"status": "no_slot_found", "cal_event_id": None}
+
+        # Load lead from DB to build Prospect object
+        async with AsyncSessionLocal() as db:
+            lead = await db.get(Lead, lead_id)
+            if not lead:
+                return {"status": "lead_not_found", "cal_event_id": None}
+
+            prospect = Prospect(
+                prospect_id=lead.id,
+                company_id=lead.company_id or "",
+                contact_name=lead.contact_name,
+                email=lead.email,
+                phone=lead.phone,
+                timezone=lead.timezone or "UTC",
+                preferred_channel=lead.preferred_channel or "email",
+                current_state=__import__("config.models", fromlist=["ProspectState"]).ProspectState(lead.current_state or "cold"),
+                outbound_attempt_count=lead.outbound_attempt_count or 0,
+                segment=__import__("config.models", fromlist=["Segment"]).Segment(lead.segment) if lead.segment else None,
+            )
+
+        brief_ref = f"{prospect.company_id}:booking"
+
+        # Create the booking in Cal.com
+        try:
+            booking = await create_booking(slot, prospect, brief_ref, cal_config)
+        except BookingFailedError as exc:
+            logger.error("Booking failed for lead %s: %s", lead_id, exc)
+            await _send_booking_failed_email(lead_id, slot)
+            return {"status": "booking_failed", "cal_event_id": None, "error": str(exc)}
+
+        # Persist event + update lead state
+        async with AsyncSessionLocal() as db:
+            lead = await db.get(Lead, lead_id)
+            if lead:
+                lead.current_state = "warm"
+                lead.cal_event_id = booking.cal_event_id
+                from datetime import datetime, timezone as tz_mod
+                lead.updated_at = datetime.now(tz_mod.utc)
+                db.add(Event(
+                    lead_id=lead_id,
+                    event_type="booking_created",
+                    payload={
+                        "cal_event_id": booking.cal_event_id,
+                        "slot_start": slot.start_utc,
+                        "slot_local": slot.local_display,
+                    },
+                ))
+                db.add(Message(
+                    lead_id=lead_id,
+                    direction="outbound",
+                    channel="email",
+                    body=f"Discovery call confirmed for {slot.local_display}.",
+                    subject="Discovery Call Confirmed — Tenacious Consulting",
+                    intent="chooses_slot",
+                    is_draft=False,
+                ))
+                await db.commit()
+
+        # Send confirmation email
+        await _send_confirmation_email(lead_id, slot, booking.cal_event_id)
+
+        return {
+            "status": "booked",
+            "cal_event_id": booking.cal_event_id,
+            "slot_local": slot.local_display,
+            "slot_start_utc": slot.start_utc,
+        }
+
+
+def _pick_best_slot(text: str, slots: list[Slot]) -> Slot | None:
+    """Pick the slot that best matches day/time keywords in the reply text."""
+    if not slots:
+        return None
+
+    text_lower = text.lower()
+
+    day_map = {
+        "monday": 0, "mon": 0,
+        "tuesday": 1, "tue": 1,
+        "wednesday": 2, "wed": 2,
+        "thursday": 3, "thu": 3,
+        "friday": 4, "fri": 4,
+        "saturday": 5, "sat": 5,
+        "sunday": 6, "sun": 6,
+    }
+
+    # Find mentioned day
+    target_weekday = None
+    for word, day in day_map.items():
+        if word in text_lower:
+            target_weekday = day
+            break
+
+    # Find mentioned hour (e.g. "2:00 pm", "14:00", "2pm")
+    import re
+    target_hour = None
+    m = re.search(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", text_lower)
+    if m:
+        hour = int(m.group(1))
+        meridiem = m.group(3)
+        if meridiem == "pm" and hour < 12:
+            hour += 12
+        elif meridiem == "am" and hour == 12:
+            hour = 0
+        target_hour = hour
+
+    # Score each slot
+    best_slot = None
+    best_score = -1
+    for slot in slots:
+        try:
+            dt = datetime.fromisoformat(slot.start_utc.replace("Z", "+00:00"))
+        except Exception:
+            continue
+        score = 0
+        if target_weekday is not None and dt.weekday() == target_weekday:
+            score += 2
+        if target_hour is not None and dt.hour == target_hour:
+            score += 2
+        if score > best_score:
+            best_score = score
+            best_slot = slot
+
+    # Fall back to first slot if no match
+    return best_slot or slots[0]
+
+
+async def _send_confirmation_email(lead_id: str, slot: Slot, cal_event_id: str) -> None:
+    """Send a booking confirmation email to the staff sink (or real prospect)."""
+    import os
+    import resend
+    from db.session import AsyncSessionLocal
+    from db.models import Lead
+
+    async with AsyncSessionLocal() as db:
+        lead = await db.get(Lead, lead_id)
+        if not lead:
+            return
+        to_email = os.environ.get("STAFF_SINK_EMAIL") or lead.email
+        resend_from = os.environ.get("RESEND_FROM", "onboarding@resend.dev")
+
+    resend.api_key = os.environ.get("RESEND_API_KEY", "")
+    body = (
+        f"Great news! Your discovery call with Tenacious Consulting has been confirmed.\n\n"
+        f"Time: {slot.local_display}\n"
+        f"Cal.com Event ID: {cal_event_id}\n\n"
+        f"We look forward to speaking with you.\n\n"
+        f"Best,\nTenacious Consulting"
+    )
+    try:
+        resend.Emails.send({
+            "from": resend_from,
+            "reply_to": [resend_from],
+            "to": [to_email],
+            "subject": f"[Lead: {lead_id}] Discovery Call Confirmed — Tenacious Consulting",
+            "text": body,
+            "tags": [{"name": "prospect_id", "value": lead_id}],
+        })
+        logger.info("Confirmation email sent for lead_id=%s slot=%s", lead_id, slot.local_display)
+    except Exception as exc:
+        logger.warning("Confirmation email failed: %s", exc)
+
+
+async def _send_no_slot_email(lead_id: str, cal_config: CalConfig) -> None:
+    """Send an email saying no matching slot was found, ask to pick again."""
+    import os
+    import resend
+    from db.session import AsyncSessionLocal
+    from db.models import Lead
+
+    async with AsyncSessionLocal() as db:
+        lead = await db.get(Lead, lead_id)
+        if not lead:
+            return
+        to_email = os.environ.get("STAFF_SINK_EMAIL") or lead.email
+
+    resend.api_key = os.environ.get("RESEND_API_KEY", "")
+    resend_from = os.environ.get("RESEND_FROM", "onboarding@resend.dev")
+    body = (
+        "Thanks for your reply! We couldn't find an exact match for that time.\n\n"
+        "Could you share a couple of alternative times that work for you "
+        "(day + time + timezone)? We'll get something confirmed right away.\n\n"
+        "Best,\nTenacious Consulting"
+    )
+    try:
+        resend.Emails.send({
+            "from": resend_from,
+            "reply_to": [resend_from],
+            "to": [to_email],
+            "subject": f"[Lead: {lead_id}] Re: Discovery Call — Let's find a time",
+            "text": body,
+            "tags": [{"name": "prospect_id", "value": lead_id}],
+        })
+    except Exception as exc:
+        logger.warning("No-slot email failed: %s", exc)
+
+
+async def _send_booking_failed_email(lead_id: str, slot: Slot) -> None:
+    """Notify staff sink that booking failed and needs manual follow-up."""
+    import os
+    import resend
+    from db.session import AsyncSessionLocal
+    from db.models import Lead
+
+    async with AsyncSessionLocal() as db:
+        lead = await db.get(Lead, lead_id)
+        if not lead:
+            return
+        to_email = os.environ.get("STAFF_SINK_EMAIL") or lead.email
+
+    resend.api_key = os.environ.get("RESEND_API_KEY", "")
+    resend_from = os.environ.get("RESEND_FROM", "onboarding@resend.dev")
+    body = (
+        f"We encountered an issue booking your discovery call for {slot.local_display}.\n\n"
+        "A member of our team will reach out shortly to confirm your slot manually.\n\n"
+        "Apologies for the inconvenience.\n\nBest,\nTenacious Consulting"
+    )
+    try:
+        resend.Emails.send({
+            "from": resend_from,
+            "reply_to": [resend_from],
+            "to": [to_email],
+            "subject": f"[Lead: {lead_id}] Re: Discovery Call — We'll follow up",
+            "text": body,
+            "tags": [{"name": "prospect_id", "value": lead_id}],
+        })
+    except Exception as exc:
+        logger.warning("Booking-failed email failed: %s", exc)
+
+
+# ---------------------------------------------------------------------------
 # Exceptions
 # ---------------------------------------------------------------------------
 

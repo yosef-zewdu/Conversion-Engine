@@ -267,10 +267,27 @@ class ConversationOrchestrator:
                 inbound_text=body,
                 prospect_timezone=prospect.get("timezone", "UTC"),
             )
+            status = result.get("status", "")
+            if status == "booked":
+                reply_text = (
+                    f"Your discovery call has been confirmed for {result.get('slot_local', 'your requested time')}. "
+                    f"We look forward to speaking with you!"
+                )
+            elif status == "no_slot_found":
+                reply_text = (
+                    "Thanks for your reply! We couldn't find an exact match for that time. "
+                    "Could you share a couple of alternative times that work for you?"
+                )
+            else:
+                reply_text = (
+                    "We encountered an issue booking your slot. "
+                    "A team member will follow up shortly to confirm manually."
+                )
             return {
                 "trace_id": trace_id,
                 "intent": "chooses_slot",
-                "action_taken": "booking_attempted",
+                "reply_text": reply_text,
+                "action_taken": f"booking_{status}",
                 "booking_result": result,
                 "policy_decision": {"allowed": True, "violations": []},
             }
@@ -279,6 +296,7 @@ class ConversationOrchestrator:
             return {
                 "trace_id": trace_id,
                 "intent": "chooses_slot",
+                "reply_text": "A team member will follow up shortly to confirm your discovery call.",
                 "action_taken": "booking_failed",
                 "error": str(exc),
                 "policy_decision": {"allowed": True, "violations": []},
