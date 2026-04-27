@@ -1,7 +1,8 @@
 import { Link, useLocation } from 'react-router-dom';
 
 const NAV = [
-  { to: '/', label: 'Campaigns' },
+  { to: '/', label: 'Dashboard' },
+  { to: '/campaigns', label: 'Campaigns' },
   { to: '/accounts', label: 'Accounts' },
 ];
 

@@ -184,7 +184,7 @@ function OverviewTab({ lead }) {
       <InfoCard title="Enrichment Core" icon="sparkles">
         <KV k="ICP Segment" v={lead.segment} highlight />
         <KV k="ICP Confidence" v={lead.icp_confidence ? `${(lead.icp_confidence * 100).toFixed(0)}%` : '—'} />
-        <KV k="AI Maturity" v={`${lead.ai_maturity_score ?? '—'} / 3`} />
+        <KV k="AI Maturity" v={lead.ai_maturity_score === null || lead.ai_maturity_score === undefined ? 'Unknown (Scrape Failed)' : `${lead.ai_maturity_score} / 3`} />
         <KV k="Bench Fit" v={lead.bench_mismatch === false ? 'Optimal' : lead.bench_mismatch === true ? 'Mismatch' : 'Unknown'} />
       </InfoCard>
 

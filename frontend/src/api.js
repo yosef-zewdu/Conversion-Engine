@@ -40,8 +40,10 @@ export const api = {
   runCampaign: (body) => request('POST', '/campaigns/run', body),
   getCampaign: (id) => request('GET', `/campaigns/${id}`),
   getCampaignAccounts: (id) => request('GET', `/campaigns/${id}/accounts`),
+  deleteCampaign: (id) => request('DELETE', `/campaigns/${id}`),
 
   // Leads
+  listLeads: () => request('GET', '/leads'),
   getLead: (id) => request('GET', `/leads/${id}`),
   getLeadBriefs: (id) => request('GET', `/leads/${id}/briefs`),
   getLeadMessages: (id) => request('GET', `/leads/${id}/messages`),

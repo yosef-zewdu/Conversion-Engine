@@ -17,15 +17,22 @@ export default function AccountsPage() {
   useEffect(() => {
     async function load() {
       try {
-        const [c, accs] = await Promise.all([
-          api.getCampaign(campaignId),
-          api.getCampaignAccounts(campaignId),
-        ]);
-        setCampaign(c);
-        setAccounts(accs);
-        // Auto-poll while the campaign is still running
-        if (c?.status === 'running') {
-          pollRef.current = setTimeout(load, 5000);
+        if (campaignId) {
+          const [c, accs] = await Promise.all([
+            api.getCampaign(campaignId),
+            api.getCampaignAccounts(campaignId),
+          ]);
+          setCampaign(c);
+          setAccounts(accs);
+          // Auto-poll while the campaign is still running
+          if (c?.status === 'running') {
+            pollRef.current = setTimeout(load, 5000);
+          }
+        } else {
+          // Global view - fetch all leads
+          const accs = await api.listLeads();
+          setAccounts(accs);
+          setCampaign({ campaign_id: 'All Campaigns', status: 'view-only' });
         }
       } catch (e) {
         setError(e.message);
@@ -33,7 +40,7 @@ export default function AccountsPage() {
         setLoading(false);
       }
     }
-    if (campaignId) load();
+    load();
     return () => clearTimeout(pollRef.current);
   }, [campaignId]);
 
@@ -179,7 +186,13 @@ function CampaignStat({ label, value, highlight }) {
 }
 
 function AiScore({ score }) {
-  if (score === null || score === undefined) return <span className="text-slate-700">—</span>;
+  if (score === null || score === undefined) {
+    return (
+      <div className="flex justify-center items-center h-4">
+        <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500 bg-slate-900 border border-slate-800 px-2 rounded">Unknown</span>
+      </div>
+    );
+  }
   const bars = [1, 2, 3];
   return (
     <div className="flex gap-1 justify-center items-end h-3">

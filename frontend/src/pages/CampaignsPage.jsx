@@ -144,12 +144,15 @@ export default function CampaignsPage() {
               <div className="flex items-center gap-4">
                 <input
                   type="range"
-                  min={1}
-                  max={100}
-                  step={5}
+                  min="1"
+                  max="100"
+                  step="1"
                   className="flex-1 accent-indigo-500 h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer"
                   value={form.limit}
-                  onChange={(e) => setForm((f) => ({ ...f, limit: parseInt(e.target.value, 10) }))}
+                  onInput={(e) => {
+                    const val = Number(e.target.value);
+                    setForm(f => ({ ...f, limit: val }));
+                  }}
                 />
                 <span className="w-12 text-center text-sm font-mono font-bold text-indigo-400 bg-indigo-500/10 py-1 rounded border border-indigo-500/20">
                   {form.limit}
@@ -225,17 +228,45 @@ export default function CampaignsPage() {
                   className="flex items-center gap-4 px-6 py-4 hover:bg-white/5 cursor-pointer transition-colors group"
                   onClick={() => navigate(`/campaigns/${run.id}/accounts`)}
                 >
+                  <div className="w-8 h-8 rounded-lg bg-indigo-500/10 flex items-center justify-center text-indigo-400">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                    </svg>
+                  </div>
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm font-bold text-slate-100 group-hover:text-indigo-400 transition-colors truncate">{run.campaign_id}</div>
-                    <div className="text-[10px] font-mono text-slate-600">{run.id}</div>
+                    <div className="flex items-center gap-2">
+                       <span className="text-[10px] font-black text-indigo-500 uppercase tracking-tighter">Campaign</span>
+                       <div className="text-sm font-bold text-slate-100 group-hover:text-indigo-400 transition-colors truncate">{run.campaign_id}</div>
+                    </div>
+                    <div className="text-[10px] font-mono text-slate-600">Reference: {run.id}</div>
                   </div>
                   <div className="text-right space-y-1 shrink-0">
                     <div className={`text-[10px] font-bold uppercase tracking-widest ${statusColor}`}>{run.status}</div>
-                    <div className="text-[10px] text-slate-600">{run.qualified_count ?? 0} leads</div>
+                    <div className="text-[10px] text-slate-500 font-medium">{run.qualified_count ?? 0} qualified accounts</div>
                   </div>
-                  <svg className="w-4 h-4 text-slate-700 group-hover:text-indigo-400 transition-colors shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" />
-                  </svg>
+                  <div className="flex items-center gap-2">
+                    <div className="p-2 rounded-lg bg-slate-800/50 group-hover:bg-indigo-500 group-hover:text-white transition-all text-slate-600">
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" />
+                      </svg>
+                    </div>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (confirm('Delete this campaign and all associated results?')) {
+                          api.deleteCampaign(run.id).then(() => {
+                            setHistory(prev => prev.filter(h => h.id !== run.id));
+                          });
+                        }
+                      }}
+                      className="p-2 rounded-lg bg-slate-800/50 hover:bg-red-500/20 hover:text-red-400 text-slate-600 transition-all border border-transparent hover:border-red-500/30"
+                      title="Delete Campaign"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </button>
+                  </div>
                 </div>
               );
             })}
