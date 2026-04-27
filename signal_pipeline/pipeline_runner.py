@@ -313,6 +313,7 @@ class PipelineRunner:
         if job_posts is not None and job_posts.job_post_count is None:
             try:
                 import json
+                import os
                 from openai import AsyncOpenAI
 
                 client = AsyncOpenAI(

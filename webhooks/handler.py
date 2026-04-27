@@ -16,15 +16,20 @@ from webhooks.api.routers import webhooks, campaigns, leads, dev, traces
 logger = logging.getLogger(__name__)
 
 # Security gate
+_WEBHOOK_PATHS = frozenset(["/webhooks/email", "/webhooks/sms", "/webhooks/cal", "/webhooks/hubspot"])
+
 async def verify_api_key(request: Request, x_api_key: str = Header(None)):
     if request.method == "GET":
-        # Public read access
         return
-        
+
+    # External webhook callbacks (Resend, Cal.com, AT) carry no API key
+    if request.url.path in _WEBHOOK_PATHS:
+        return
+
     admin_key = os.environ.get("ADMIN_API_KEY")
     if not admin_key:
         return
-        
+
     if x_api_key != admin_key:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
