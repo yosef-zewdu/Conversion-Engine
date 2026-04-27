@@ -87,6 +87,14 @@ async def _process_received_email(email_data: dict) -> None:
         lead_id = prospect.get("prospect_id")
         logger.info("inbox_poller: matched lead_id=%s", lead_id)
 
+        # Verify lead actually exists in DB before inserting message (FK guard)
+        if lead_id:
+            lead_row = await db.get(Lead, lead_id)
+            if not lead_row:
+                logger.warning("inbox_poller: lead_id=%s not in DB — skipping email_id=%s", lead_id, email_id)
+                _seen_ids.add(email_id)
+                return
+
         # Persist inbound message
         if lead_id and content:
             db.add(Message(
