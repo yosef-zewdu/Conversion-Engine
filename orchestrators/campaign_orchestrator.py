@@ -123,39 +123,13 @@ class CampaignOrchestrator:
                         qualified_accounts.append(final_account)
                         
                         # Trigger streaming callback
+                        import asyncio
                         if on_lead:
-                            import asyncio
                             if asyncio.iscoroutinefunction(on_lead):
                                 await on_lead(final_account)
                             else:
                                 on_lead(final_account)
                                 
-                        # AUTOMATION: Trigger Outreach Agent immediately
-                        if campaign_config.get("auto_outreach", True):
-                            from agent.graph import OutreachAgent
-                            from config.models import Prospect
-                            
-                            logger.info("Campaign %s: Automatically triggering outreach for %s", run_id, final_account.get("company_name"))
-                            
-                            # Reconstruct Prospect object for the agent
-                            prospect = Prospect(
-                                prospect_id=final_account.get("id", str(uuid.uuid4())),
-                                company_id=final_account.get("crunchbase_id"),
-                                contact_name=final_account.get("synthetic_contact", {}).get("contact_name", "Engineering Leader"),
-                                email=final_account.get("synthetic_contact", {}).get("email", "test@tenacious.com"),
-                                phone=None,
-                                timezone="UTC",
-                                preferred_channel="email",
-                            )
-                            # Set attributes missing from constructor but required by graph
-                            object.__setattr__(prospect, "company_name", final_account.get("company_name"))
-                            object.__setattr__(prospect, "hiring_signal_brief", final_account.get("hiring_signal_brief"))
-                            object.__setattr__(prospect, "competitor_gap_brief", final_account.get("competitor_gap_brief"))
-                            object.__setattr__(prospect, "icp_result", final_account.get("icp_result"))
-                            
-                            # Run the agent in the background or sequentially
-                            agent = OutreachAgent()
-                            await agent.run(prospect)
                                 
                 except Exception as e:
                     logger.warning("Failed to process candidate in campaign %s: %s", run_id, e)

@@ -450,10 +450,12 @@ async def node_send_email(state: AgentState) -> dict:
             logger.info("Kill switch: routing email to staff sink %s", sink_email)
             try:
                 resend.api_key = os.environ.get("RESEND_API_KEY", "")
+                resend_from = os.environ.get("RESEND_FROM", "onboarding@resend.dev")
                 resend.Emails.send({
-                    "from": os.environ.get("RESEND_FROM", "onboarding@resend.dev"),
+                    "from": resend_from,
+                    "reply_to": [resend_from],
                     "to": [sink_email],
-                    "subject": "Re: Your inquiry — Tenacious Consulting",
+                    "subject": f"[Lead: {prospect_dict.get('prospect_id', '')}] Re: Your inquiry — Tenacious Consulting",
                     "text": reply_text,
                     "tags": [{"name": "prospect_id", "value": prospect_dict.get("prospect_id", "")}],
                 })
