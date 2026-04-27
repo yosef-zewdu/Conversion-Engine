@@ -50,6 +50,10 @@ app.add_middleware(
 async def _startup() -> None:
     await init_db()
     logger.info("Conversion Engine database initialized.")
+    # Start Resend inbox poller in the background (bridges Receiving Email API → agent)
+    import asyncio
+    from webhooks.inbox_poller import start_inbox_poller
+    asyncio.create_task(start_inbox_poller())
 
 @app.get("/health")
 async def health(auth: None = Depends(verify_api_key)) -> dict[str, str]:

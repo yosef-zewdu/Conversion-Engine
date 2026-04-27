@@ -99,6 +99,7 @@ class Message(Base):
     intent: Mapped[str | None] = mapped_column(String(64), nullable=True)   # classified intent
     is_draft: Mapped[bool] = mapped_column(Boolean, default=True)
     sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    resend_email_id: Mapped[str | None] = mapped_column(String(128), nullable=True, unique=True)
 
     lead: Mapped[Lead] = relationship("Lead", back_populates="messages")
 
