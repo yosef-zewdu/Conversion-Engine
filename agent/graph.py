@@ -430,6 +430,11 @@ async def node_send_email(state: AgentState) -> dict:
 
     reply_text = (reply_text or "").strip()
     if not reply_text:
+        # Check if policy blocked this — if so, skip send entirely
+        policy = state.get("policy_decision") or {}
+        if policy and not policy.get("allowed", True):
+            logger.info("node_send_email: policy blocked send, skipping. violations=%s", policy.get("violations"))
+            return {"reply_text": None}
         reply_text = "Thank you for your message. A team member will follow up shortly."
 
     prospect_dict = state.get("prospect") or {}
