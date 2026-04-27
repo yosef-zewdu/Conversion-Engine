@@ -368,6 +368,7 @@ class ConversationOrchestrator:
                 resend.api_key = os.environ.get("RESEND_API_KEY", "")
                 resend_from = os.environ.get("RESEND_FROM", "onboarding@resend.dev")
                 prospect_id = prospect.get("prospect_id", "")
+                logger.info("_execute_send: sending email to=%s from=%s body_len=%d", to, resend_from, len(body))
                 resend.Emails.send({
                     "from": resend_from,
                     "reply_to": [resend_from],
@@ -377,6 +378,7 @@ class ConversationOrchestrator:
                     "tags": [{"name": "prospect_id", "value": prospect_id}],
                     "headers": {"X-Tenacious-Status": "draft"},
                 })
+                logger.info("_execute_send: email sent successfully to=%s", to)
                 tool_result["status"] = "success"
                 tool_result["to"] = to
             elif channel == "sms" and to:
