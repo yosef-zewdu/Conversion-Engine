@@ -42,6 +42,13 @@ async def init_db() -> None:
     """Create all tables (idempotent — safe to call on every startup)."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Add columns that were introduced after initial schema creation.
+        # These are no-ops if the column already exists (Postgres only).
+        if "postgresql" in str(conn.engine.url):
+            for stmt in [
+                "ALTER TABLE messages ADD COLUMN IF NOT EXISTS resend_email_id VARCHAR(128) UNIQUE",
+            ]:
+                await conn.execute(__import__("sqlalchemy").text(stmt))
 
 
 async def get_db() -> AsyncSession:  # type: ignore[misc]
