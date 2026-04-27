@@ -54,7 +54,7 @@ class AIMaturityInput:
 class AIMaturityResult:
     """Output of AIMaturityScorer.score()."""
 
-    score: int                                          # 0–3
+    score: Optional[int]                                # 0–3 or None if insufficient data
     confidence: str                                     # "high" | "medium" | "low"
     justification: list[AIMaturityJustificationEntry]   # one entry per signal
 
@@ -217,8 +217,18 @@ class AIMaturityScorer:
         )
 
         ratio = weighted_sum / _MAX_POSSIBLE
-        final_score = _ratio_to_score(ratio)
-        confidence = _assign_confidence(inputs)
+        
+        # If absolutely no signals are available, score is Unknown (None)
+        is_all_none = all(v is None for v in [
+            inputs.ai_adjacent_open_roles, 
+            inputs.named_ai_ml_leadership, 
+            inputs.github_ai_activity, 
+            inputs.executive_ai_commentary, 
+            inputs.modern_data_ml_stack, 
+            inputs.strategic_communications
+        ])
+        final_score = None if is_all_none else _ratio_to_score(ratio)
+        confidence = "low" if is_all_none else _assign_confidence(inputs)
 
         # --- Per-signal justification (aligned to official schema field names) ---
         # confidence per signal: "low" when value is None (no data), "medium" otherwise

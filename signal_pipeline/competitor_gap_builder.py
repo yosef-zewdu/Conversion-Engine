@@ -403,7 +403,7 @@ def _extract_gaps(
 
 
 def _compute_sector_percentile(
-    peers: list[CompetitorGapPeer], prospect_score: int
+    peers: list[CompetitorGapPeer], prospect_score: Optional[int]
 ) -> Optional[float]:
     """
     Compute the prospect's percentile rank within the peer AI maturity distribution.
@@ -415,11 +415,11 @@ def _compute_sector_percentile(
         prospect_score: The prospect's AI maturity score.
 
     Returns:
-        Float in [0.0, 100.0], or None if there are no peers.
+        Float in [0.0, 100.0], or None if there are no peers or if score is None.
     """
-    if not peers:
+    if not peers or prospect_score is None:
         return None
-    below = sum(1 for p in peers if p.ai_maturity_score < prospect_score)
+    below = sum(1 for p in peers if p.ai_maturity_score is not None and p.ai_maturity_score < prospect_score)
     return below / len(peers) * 100.0
 
 

@@ -308,6 +308,42 @@ class PipelineRunner:
 
         # Build AI maturity input
         ai_adjacent_open_roles: Optional[int] = None
+        
+        # API FALLBACK: If web scraping fails to get job counts, ask LLM to estimate based on world knowledge
+        if job_posts is not None and job_posts.job_post_count is None:
+            try:
+                import json
+                from openai import AsyncOpenAI
+
+                client = AsyncOpenAI(
+                    api_key=os.environ.get("OPENROUTER_API_KEY", ""),
+                    base_url="https://openrouter.ai/api/v1",
+                )
+
+                prompt = (
+                    f"Estimate the AI maturity for the company '{company_name}'. "
+                    f"Return ONLY a JSON object with two keys: "
+                    f"'job_post_count' (integer 0-20 estimating open AI/ML engineering roles) and "
+                    f"'tech_signals' (list of strings representing their likely ML stack, e.g. ['python', 'pytorch', 'aws']). "
+                    f"If the company is notoriously an AI or Data company, return high numbers. If traditional, return 0."
+                )
+
+                resp = await client.chat.completions.create(
+                    model=os.environ.get("OPENROUTER_MODEL", "qwen/qwen3-235b-a22b"),
+                    messages=[{"role": "user", "content": prompt}],
+                    response_format={"type": "json_object"},
+                )
+
+                if resp.choices and resp.choices[0].message.content:
+                    data = json.loads(resp.choices[0].message.content)
+                    est_count = data.get("job_post_count", 0)
+                    if est_count > 0:
+                        job_posts.job_post_count = est_count
+                        job_posts.tech_signals = data.get("tech_signals", [])
+                        job_posts.sources_checked.append("llm_inference_api")
+            except Exception as exc:
+                logger.warning("LLM API fallback failed for AI maturity on %s: %s", company_name, exc)
+
         if job_posts is not None and job_posts.job_post_count is not None:
             ai_adjacent_open_roles = min(job_posts.job_post_count, 5)
 
