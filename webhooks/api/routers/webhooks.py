@@ -47,9 +47,10 @@ async def handle_email_reply(
         logger.warning("email webhook: bounce type=%s", event_type)
         return {"received": "bounce_logged"}
 
-    # Handle reply events — Resend fires "email.replied" when recipient hits Reply
-    if event_type != "email.replied":
-        logger.info("email webhook: ignoring non-reply type=%s", event_type)
+    # Accept both "email.replied" (send webhook) and "email.received" (inbound routing)
+    _INBOUND_TYPES = frozenset(["email.replied", "email.received"])
+    if event_type not in _INBOUND_TYPES:
+        logger.info("email webhook: ignoring non-inbound type=%s", event_type)
         return {"received": "ok", "note": f"ignored: {event_type}"}
 
     # Extract fields — Resend reply payload shape varies; be defensive
@@ -143,6 +144,105 @@ async def handle_email_reply(
             logger.info("email webhook: outbound reply persisted for lead_id=%s", lead_id)
 
     return {"received": "ok"}
+
+
+async def _handle_inbound_email(request: Request, db: AsyncSession) -> dict[str, str]:
+    """Shared logic for any inbound email — used by both /email-inbound and /email (replied)."""
+    try:
+        body = await request.json()
+    except Exception:
+        return {"received": "ok", "note": "invalid json"}
+
+    logger.info("inbound email: keys=%s", list(body.keys()))
+    logger.debug("inbound email full payload: %s", body)
+
+    # Resend inbound webhook shape:
+    # { "from": "...", "to": ["..."], "subject": "...", "text": "...", "html": "..." }
+    from_email = body.get("from", "") or ""
+    to_list = body.get("to") or []
+    if isinstance(to_list, str):
+        to_list = [to_list]
+    subject = body.get("subject", "") or ""
+    content = body.get("text") or body.get("html") or ""
+
+    prospect_id = _prospect_id_from_subject(subject)
+    prospect = None
+
+    if prospect_id:
+        prospect = await get_prospect_by_id(db, prospect_id)
+        logger.info("inbound email: subject lookup pid=%s found=%s", prospect_id, bool(prospect))
+
+    if not prospect:
+        for addr in to_list:
+            prospect = await get_prospect_by_email(db, addr)
+            if prospect:
+                logger.info("inbound email: to-addr lookup addr=%s matched", addr)
+                break
+
+    if not prospect and from_email:
+        prospect = await get_prospect_by_email(db, from_email)
+        logger.info("inbound email: from-email lookup addr=%s found=%s", from_email, bool(prospect))
+
+    if not prospect:
+        logger.warning("inbound email: no prospect found from=%s to=%s subject=%s", from_email, to_list, subject)
+        return {"received": "ok", "note": "prospect not found"}
+
+    lead_id = prospect.get("prospect_id")
+    logger.info("inbound email: matched lead_id=%s", lead_id)
+
+    if lead_id and content:
+        from db.models import Message
+        db.add(Message(
+            lead_id=lead_id,
+            direction="inbound",
+            channel="email",
+            body=content,
+            subject=subject or None,
+            intent=None,
+            is_draft=False,
+        ))
+        await db.commit()
+
+    result = await run_agent(prospect, content, channel="email")
+    logger.info("inbound email: agent result keys=%s", list((result or {}).keys()))
+
+    if result and lead_id:
+        reply_body = result.get("reply_text")
+        if reply_body:
+            from db.models import Message, Event, Lead
+            from datetime import datetime, timezone
+            db.add(Message(
+                lead_id=lead_id,
+                direction="outbound",
+                channel="email",
+                body=reply_body,
+                intent=result.get("intent"),
+                is_draft=False,
+            ))
+            lead = await db.get(Lead, lead_id)
+            if lead:
+                lead.current_state = "replied"
+                lead.outbound_attempt_count = (lead.outbound_attempt_count or 0) + 1
+                lead.updated_at = datetime.now(timezone.utc)
+            db.add(Event(
+                lead_id=lead_id,
+                event_type="reply_received",
+                payload={"from": from_email, "subject": subject},
+            ))
+            await db.commit()
+            logger.info("inbound email: outbound reply persisted for lead_id=%s", lead_id)
+
+    return {"received": "ok"}
+
+
+@router.post("/email-inbound", status_code=status.HTTP_200_OK)
+async def handle_email_inbound(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    """Resend inbound routing webhook — fires when email arrives at conversion@iavenueamb.resend.app."""
+    return await _handle_inbound_email(request, db)
+
 
 @router.post("/sms", status_code=status.HTTP_200_OK)
 async def handle_sms_reply(

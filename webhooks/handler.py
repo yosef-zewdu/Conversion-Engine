@@ -16,7 +16,7 @@ from webhooks.api.routers import webhooks, campaigns, leads, dev, traces
 logger = logging.getLogger(__name__)
 
 # Security gate
-_WEBHOOK_PATHS = frozenset(["/webhooks/email", "/webhooks/sms", "/webhooks/cal", "/webhooks/hubspot"])
+_WEBHOOK_PATHS = frozenset(["/webhooks/email", "/webhooks/email-inbound", "/webhooks/sms", "/webhooks/cal", "/webhooks/hubspot"])
 
 async def verify_api_key(request: Request, x_api_key: str = Header(None)):
     if request.method == "GET":
@@ -50,10 +50,8 @@ app.add_middleware(
 async def _startup() -> None:
     await init_db()
     logger.info("Conversion Engine database initialized.")
-    # Start Resend inbox poller in the background (bridges Receiving Email API → agent)
-    import asyncio
-    from webhooks.inbox_poller import start_inbox_poller
-    asyncio.create_task(start_inbox_poller())
+    # Inbox poller disabled — Resend sending key cannot read inbox.
+    # Replies are handled via /webhooks/email-inbound (Resend inbound routing webhook).
 
 @app.get("/health")
 async def health(auth: None = Depends(verify_api_key)) -> dict[str, str]:
