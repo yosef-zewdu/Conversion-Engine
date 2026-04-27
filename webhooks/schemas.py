@@ -1,12 +1,36 @@
 from typing import Any, Optional
 from pydantic import BaseModel, Field
 
+class ResendTag(BaseModel):
+    name: str
+    value: str
+
 class ResendData(BaseModel):
-    from_email: str = Field(alias="from")
+    model_config = {"populate_by_name": True}
+
+    from_email: str = Field(alias="from", default="")
     to: list[str] = []
+    subject: Optional[str] = None
     text: Optional[str] = None
     html: Optional[str] = None
-    tags: dict[str, str] = {}
+    # Resend sends tags as a list of {name, value} objects
+    tags: list[ResendTag] = []
+    email_id: Optional[str] = None
+
+    def get_tag(self, name: str) -> Optional[str]:
+        for t in self.tags:
+            if t.name == name:
+                return t.value
+        return None
+
+    def extract_prospect_id_from_subject(self) -> Optional[str]:
+        """Extract prospect_id embedded in subject line as [Lead: <id>]."""
+        import re
+        if self.subject:
+            m = re.search(r"\[Lead:\s*([^\]]+)\]", self.subject)
+            if m:
+                return m.group(1).strip()
+        return None
 
 class ResendPayload(BaseModel):
     type: str
@@ -22,6 +46,7 @@ class CampaignRunRequest(BaseModel):
     limit: int = 10
     mode: str = "staff_sink"
     first_channel: str = "email"
+    auto_outreach: bool = False
 
 class StartOutreachRequest(BaseModel):
     inbound_text: str = "Hello, I'm interested in learning more."

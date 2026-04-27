@@ -13,6 +13,16 @@ from webhooks.agent_runner import run_agent
 from webhooks.utils import lead_to_prospect_dict, lead_detail, message_to_dict, trace_to_dict
 
 router = APIRouter(prefix="/leads", tags=["leads"])
+@router.get("/")
+async def list_leads(
+    limit: int = 50,
+    db: AsyncSession = Depends(get_db),
+) -> list[dict[str, Any]]:
+    result = await db.execute(
+        select(Lead).order_by(Lead.updated_at.desc()).limit(limit)
+    )
+    leads = result.scalars().all()
+    return [lead_detail(l) for l in leads]
 
 @router.post("/{lead_id}/start-outreach")
 async def start_outreach(

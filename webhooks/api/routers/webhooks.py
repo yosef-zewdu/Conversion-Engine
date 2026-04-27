@@ -31,7 +31,8 @@ async def handle_email_reply(
     data = payload.data
     logger.info("email webhook: type=%s", event_type)
 
-    prospect_id = data.tags.get("prospect_id")
+    # prospect_id from tag, or from subject line "[Lead: <id>]" on replies
+    prospect_id = data.get_tag("prospect_id") or data.extract_prospect_id_from_subject()
     from_email = data.from_email
 
     if event_type in _BOUNCE_EVENT_TYPES:
@@ -41,8 +42,16 @@ async def handle_email_reply(
     if event_type in _REPLY_EVENT_TYPES or event_type == "":
         content = data.text or data.html or ""
         prospect = None
+        # Primary: look up by prospect_id tag (most reliable — set on every outbound)
         if prospect_id:
             prospect = await get_prospect_by_id(db, prospect_id)
+        # Fallback: look up by the "to" recipients (staff sink reply comes FROM sink TO resend address)
+        if not prospect and data.to:
+            for addr in data.to:
+                prospect = await get_prospect_by_email(db, addr)
+                if prospect:
+                    break
+        # Last resort: look up by from_email
         if not prospect:
             prospect = await get_prospect_by_email(db, from_email)
 

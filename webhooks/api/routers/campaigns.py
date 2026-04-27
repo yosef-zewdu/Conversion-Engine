@@ -9,11 +9,12 @@ from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import Campaign, Lead
+from db.models import Campaign, Event, Lead, Message, Trace
 from db.session import get_db, AsyncSessionLocal
 from orchestrators.campaign_orchestrator import CampaignOrchestrator
 from webhooks.schemas import CampaignRunRequest
-from webhooks.utils import campaign_to_dict, lead_summary
+from webhooks.utils import campaign_to_dict, lead_summary, lead_to_prospect_dict
+from webhooks.agent_runner import run_agent
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/campaigns", tags=["campaigns"])
@@ -22,14 +23,15 @@ async def background_campaign_task(run_id: str, config: dict):
     """Background worker to run the campaign and persist leads to DB incrementally."""
     try:
         async def on_lead_callback(account_data: dict):
-            """Persist a single lead to DB as it is processed."""
+            """Persist a single lead to DB, then trigger outreach if autonomous mode."""
             async with AsyncSessionLocal() as db:
                 contact = account_data.get("synthetic_contact") or {}
                 icp = account_data.get("icp_result") or {}
                 brief = account_data.get("hiring_signal_brief") or {}
-                
+
+                lead_id = str(uuid.uuid4())
                 lead = Lead(
-                    id=str(uuid.uuid4()),
+                    id=lead_id,
                     campaign_id=run_id,
                     company_name=account_data.get("company_name", ""),
                     company_id=account_data.get("crunchbase_id", ""),
@@ -41,21 +43,99 @@ async def background_campaign_task(run_id: str, config: dict):
                     current_state="cold",
                     segment=icp.get("segment"),
                     icp_confidence=icp.get("confidence"),
-                    ai_maturity_score=brief.get("ai_maturity_score"),
-                    bench_mismatch=brief.get("bench_mismatch"),
+                    ai_maturity_score=(
+                        brief.get("ai_maturity", {}).get("score")
+                        or brief.get("ai_maturity_score")
+                    ),
+                    bench_mismatch=(
+                        brief.get("bench_match", {}).get("bench_mismatch")
+                        or brief.get("bench_mismatch")
+                    ),
                     source_refs=account_data.get("source_refs"),
                     hiring_signal_brief=account_data.get("hiring_signal_brief"),
                     competitor_gap_brief=account_data.get("competitor_gap_brief"),
                     icp_result=icp,
                 )
                 db.add(lead)
-                
-                # Update Campaign qualified count
+
                 campaign = await db.get(Campaign, run_id)
                 if campaign:
                     campaign.qualified_count = (campaign.qualified_count or 0) + 1
-                
+
                 await db.commit()
+
+            # Auto-outreach: run agent and persist results, same as POST /leads/{id}/start-outreach
+            if config.get("auto_outreach"):
+                try:
+                    async with AsyncSessionLocal() as db:
+                        lead = await db.get(Lead, lead_id)
+                        if not lead:
+                            return
+                        prospect = lead_to_prospect_dict(lead)
+
+                    result = await run_agent(prospect, "", channel="email")
+
+                    if result:
+                        async with AsyncSessionLocal() as db:
+                            lead = await db.get(Lead, lead_id)
+                            if not lead:
+                                return
+                            if result.get("segment"):
+                                lead.segment = result["segment"]
+                            if result.get("hs_contact_id"):
+                                lead.hs_contact_id = result["hs_contact_id"]
+                            if result.get("bench_mismatch") is not None:
+                                lead.bench_mismatch = result["bench_mismatch"]
+                            if result.get("hiring_signal_brief"):
+                                lead.hiring_signal_brief = result["hiring_signal_brief"]
+                                ai_score = result["hiring_signal_brief"].get("ai_maturity_score")
+                                if ai_score is not None:
+                                    lead.ai_maturity_score = ai_score
+                            if result.get("competitor_gap_brief"):
+                                lead.competitor_gap_brief = result["competitor_gap_brief"]
+                            if result.get("icp_result"):
+                                lead.icp_result = result["icp_result"]
+                                icp_conf = result["icp_result"].get("confidence")
+                                if icp_conf is not None:
+                                    lead.icp_confidence = icp_conf
+                            lead.outbound_attempt_count += 1
+                            lead.current_state = "contacted"
+                            lead.updated_at = datetime.now(timezone.utc)
+
+                            db.add(Event(
+                                lead_id=lead_id,
+                                event_type="outreach_started",
+                                payload={
+                                    "channel": "email",
+                                    "segment": result.get("segment"),
+                                    "destination": result.get("destination"),
+                                    "auto": True,
+                                },
+                            ))
+
+                            reply_text = result.get("reply_text") or ""
+                            if reply_text:
+                                db.add(Message(
+                                    lead_id=lead_id,
+                                    direction="outbound",
+                                    channel="email",
+                                    body=reply_text,
+                                    is_draft=True,
+                                ))
+
+                            trace_id = result.get("trace_id") or str(uuid.uuid4())
+                            db.add(Trace(
+                                id=trace_id,
+                                lead_id=lead_id,
+                                segment=result.get("segment"),
+                                destination=result.get("destination"),
+                                policy_decision=result.get("policy_decision"),
+                            ))
+
+                            await db.commit()
+                            logger.info("Auto-outreach complete for lead %s (%s)", lead_id, lead.company_name)
+                except Exception as exc:
+                    logger.error("Auto-outreach failed for lead %s: %s", lead_id, exc, exc_info=True)
 
         orchestrator = CampaignOrchestrator()
         result = await orchestrator.run(config, run_id=run_id, on_lead=on_lead_callback)
@@ -94,6 +174,7 @@ async def run_campaign(
         "limit": body.limit,
         "mode": body.mode,
         "outreach": {"first_channel": body.first_channel},
+        "auto_outreach": body.auto_outreach,
     }
 
     # Create initial "Running" record
