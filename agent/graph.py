@@ -480,14 +480,17 @@ async def node_send_email(state: AgentState) -> dict:
 
     # Email dispatch (default)
     to_email = prospect_dict.get("email", "")
+    prospect_id = prospect_dict.get("prospect_id", "")
+    resend_from = os.environ.get("RESEND_FROM", "onboarding@resend.dev")
     try:
         resend.api_key = os.environ.get("RESEND_API_KEY", "")
         resend.Emails.send({
-            "from": os.environ.get("RESEND_FROM", "onboarding@resend.dev"),
+            "from": resend_from,
+            "reply_to": [resend_from],
             "to": [to_email],
-            "subject": "Re: Your inquiry — Tenacious Consulting",
+            "subject": f"[Lead: {prospect_id}] Re: Your inquiry — Tenacious Consulting",
             "text": reply_text,
-            "tags": [{"name": "prospect_id", "value": prospect_dict.get("prospect_id", "")}],
+            "tags": [{"name": "prospect_id", "value": prospect_id}],
         })
         logger.info("Email sent to %s", to_email)
     except Exception as exc:  # noqa: BLE001
