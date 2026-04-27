@@ -5,6 +5,13 @@ import Spinner from '../components/Spinner';
 
 const SEGMENT_OPTIONS = ['S1', 'S2', 'S3', 'S4'];
 
+const MODEL_OPTIONS = [
+  { value: 'qwen/qwen3-235b-a22b', label: 'Qwen3 235B (default)' },
+  { value: 'gpt-4o', label: 'GPT-4o' },
+  { value: 'google/gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro Preview' },
+  { value: 'anthropic/claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
+];
+
 export default function CampaignsPage() {
   const navigate = useNavigate();
   const [form, setForm] = useState({
@@ -12,16 +19,27 @@ export default function CampaignsPage() {
     target_segments: ['S1', 'S4'],
     limit: 10,
     mode: 'staff_sink',
+    custom_sink_email: '',
     first_channel: 'email',
     auto_outreach: true,
+    model: 'qwen/qwen3-235b-a22b',
   });
+  const [campaignCosts, setCampaignCosts] = useState({});
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const [history, setHistory] = useState([]);
 
   useEffect(() => {
-    api.listCampaigns().then(setHistory).catch(() => {});
+    api.listCampaigns().then((runs) => {
+      setHistory(runs);
+      // Fetch cost for each campaign in parallel
+      runs.forEach((run) => {
+        api.getCampaignCost(run.id)
+          .then((c) => setCampaignCosts((prev) => ({ ...prev, [run.id]: c.total_cost_usd })))
+          .catch(() => {});
+      });
+    }).catch(() => {});
   }, []);
 
   function toggleSegment(seg) {
@@ -41,7 +59,14 @@ export default function CampaignsPage() {
       const res = await api.runCampaign(form);
       setResult(res);
       // Refresh history after starting a run
-      api.listCampaigns().then(setHistory).catch(() => {});
+      api.listCampaigns().then((runs) => {
+        setHistory(runs);
+        runs.forEach((run) => {
+          api.getCampaignCost(run.id)
+            .then((c) => setCampaignCosts((prev) => ({ ...prev, [run.id]: c.total_cost_usd })))
+            .catch(() => {});
+        });
+      }).catch(() => {});
     } catch (e) {
       setError(e.message);
     } finally {
@@ -86,11 +111,21 @@ export default function CampaignsPage() {
                 <select
                   className="w-full bg-slate-950/50 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500/50 transition-all appearance-none"
                   value={form.mode}
-                  onChange={(e) => setForm((f) => ({ ...f, mode: e.target.value }))}
+                  onChange={(e) => setForm((f) => ({ ...f, mode: e.target.value, custom_sink_email: '' }))}
                 >
                   <option value="staff_sink">Staff Sink (safe)</option>
+                  <option value="custom_email">Custom Email</option>
                   <option value="live">Live Production</option>
                 </select>
+                {form.mode === 'custom_email' && (
+                  <input
+                    type="email"
+                    placeholder="Enter recipient email..."
+                    className="w-full bg-slate-950/50 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500/50 transition-all mt-2"
+                    value={form.custom_sink_email}
+                    onChange={(e) => setForm((f) => ({ ...f, custom_sink_email: e.target.value }))}
+                  />
+                )}
               </div>
               <div className="space-y-2">
                 <label className="text-[11px] font-bold text-slate-500 uppercase tracking-widest pl-1">Autonomy Level</label>
@@ -106,6 +141,21 @@ export default function CampaignsPage() {
                   {form.auto_outreach ? 'Automatically sends messages after qualification' : 'Wait for manual approval before sending'}
                 </p>
               </div>
+            </div>
+
+            {/* LLM Model */}
+            <div className="space-y-2">
+              <label className="text-[11px] font-bold text-slate-500 uppercase tracking-widest pl-1">LLM Model</label>
+              <select
+                className="w-full bg-slate-950/50 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500/50 transition-all appearance-none"
+                value={form.model}
+                onChange={(e) => setForm((f) => ({ ...f, model: e.target.value }))}
+              >
+                {MODEL_OPTIONS.map((m) => (
+                  <option key={m.value} value={m.value}>{m.label}</option>
+                ))}
+              </select>
+              <p className="text-[10px] text-slate-500 italic px-1">Model used for outreach drafting via OpenRouter</p>
             </div>
           </div>
 
@@ -243,6 +293,11 @@ export default function CampaignsPage() {
                   <div className="text-right space-y-1 shrink-0">
                     <div className={`text-[10px] font-bold uppercase tracking-widest ${statusColor}`}>{run.status}</div>
                     <div className="text-[10px] text-slate-500 font-medium">{run.qualified_count ?? 0} qualified accounts</div>
+                    {campaignCosts[run.id] !== undefined && (
+                      <div className="text-[10px] font-mono text-amber-500/70">
+                        ${campaignCosts[run.id].toFixed(4)} cost
+                      </div>
+                    )}
                   </div>
                   <div className="flex items-center gap-2">
                     <div className="p-2 rounded-lg bg-slate-800/50 group-hover:bg-indigo-500 group-hover:text-white transition-all text-slate-600">

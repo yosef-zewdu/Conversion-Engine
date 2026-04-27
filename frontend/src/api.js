@@ -49,6 +49,8 @@ export const api = {
   getLeadMessages: (id) => request('GET', `/leads/${id}/messages`),
   getLeadTraces: (id) => request('GET', `/leads/${id}/traces`),
   startOutreach: (id, body) => request('POST', `/leads/${id}/start-outreach`, body),
+  deleteLead: (id) => request('DELETE', `/leads/${id}`),
+  getCampaignCost: (id) => request('GET', `/campaigns/${id}/cost`),
 
   // Dev
   simulateReply: (body) => request('POST', '/dev/simulate-reply', body),
