@@ -428,6 +428,7 @@ async def node_send_email(state: AgentState) -> dict:
         reply_text = re.sub(r"<tools>.*?</tools>", "", reply_text, flags=re.DOTALL).strip()
         reply_text = re.sub(r"\{\"type\":\s*\"function\".*?\}\s*$", "", reply_text, flags=re.DOTALL).strip()
 
+    reply_text = (reply_text or "").strip()
     if not reply_text:
         reply_text = "Thank you for your message. A team member will follow up shortly."
 
