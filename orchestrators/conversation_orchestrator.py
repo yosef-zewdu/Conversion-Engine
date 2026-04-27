@@ -65,15 +65,18 @@ class ConversationOrchestrator:
         body = event.get("body", "")
         prospect = event.get("prospect") or {}
         briefs = event.get("briefs") or {}
+        model_override = event.get("model") or prospect.get("model") or ""
 
         logger.info(
-            "ConversationOrchestrator: trace=%s event_type=%s channel=%s",
-            trace_id, event_type, channel,
+            "ConversationOrchestrator: trace=%s event_type=%s channel=%s model=%s",
+            trace_id, event_type, channel, model_override or "default",
         )
 
         # ── Step 1: Load state ────────────────────────────────────────────
         state = self._load_state(prospect, briefs, event)
         state["trace_id"] = trace_id
+        if model_override:
+            state["model_override"] = model_override
 
         # ── Step 2: check_command — fast path before LLM ─────────────────
         command_result = self._check_command(body)
@@ -109,7 +112,7 @@ class ConversationOrchestrator:
             return self._no_action_response(state, trace_id)
 
         # ── Step 5: compose outbound via 3-stage mechanism chain ──────────
-        draft_result = self._compose_via_mechanism(state, briefs, channel)
+        draft_result = self._compose_via_mechanism(state, briefs, channel, state.get("model_override", ""))
 
         # ── Step 6: policy_review ─────────────────────────────────────────
         proposed_action = {
@@ -196,6 +199,7 @@ class ConversationOrchestrator:
             "lifecycle_stage": prospect.get("current_state", "cold"),
             "opted_out": False,
             "destination": "staff_sink",
+            "custom_sink_email": prospect.get("custom_sink_email", ""),
         }
 
     def _check_command(self, body: str) -> str | None:
@@ -303,7 +307,7 @@ class ConversationOrchestrator:
             }
 
     def _compose_via_mechanism(
-        self, state: dict, briefs: dict, channel: str
+        self, state: dict, briefs: dict, channel: str, model_override: str = ""
     ) -> dict:
         """Run 3-stage mechanism chain. Falls back to LangGraph agent output."""
         try:
@@ -334,7 +338,7 @@ class ConversationOrchestrator:
                 segment=Segment(prospect_dict.get("segment")) if prospect_dict.get("segment") else None,
             )
 
-            msg = compose_outbound_chain(prospect, brief, gap_brief, channel)
+            msg = compose_outbound_chain(prospect, brief, gap_brief, channel, model=model_override or None)
             return {
                 "content": msg.content,
                 "subject": msg.subject,
@@ -367,8 +371,8 @@ class ConversationOrchestrator:
         # Kill switch routing
         if destination == Destination.STAFF_SINK:
             import os
-            sink = os.environ.get("STAFF_SINK_EMAIL", "")
-            to = sink if sink else prospect.get("email", "")
+            custom_sink = state.get("custom_sink_email", "")
+            to = custom_sink or os.environ.get("STAFF_SINK_EMAIL", "") or prospect.get("email", "")
         else:
             to = prospect.get("email", "") if channel == "email" else prospect.get("phone", "")
 

@@ -115,7 +115,7 @@ class CalConfig:
     def from_env(cls) -> CalConfig:
         """Build a ``CalConfig`` from environment variables."""
         return cls(
-            cal_base_url=os.environ.get("CAL_BASE_URL", "https://api.cal.eu"),
+            cal_base_url=os.environ.get("CAL_BASE_URL", "https://api.cal.com"),
             cal_api_key=os.environ["CAL_API_KEY"],
             event_type_id=int(os.environ.get("CAL_EVENT_TYPE_ID", "268206")),
         )
@@ -316,9 +316,16 @@ async def create_booking(
     if crm_writer is None:
         crm_writer = _NullCRMWriter()
 
+    # Normalise start time to UTC ISO 8601 with Z suffix (Cal.com v2 requirement)
+    try:
+        _dt = datetime.fromisoformat(slot.start_utc.replace("Z", "+00:00"))
+        start_utc = _dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except Exception:
+        start_utc = slot.start_utc
+
     payload = {
         "eventTypeId": cal_config.event_type_id,
-        "start": slot.start_utc,
+        "start": start_utc,
         "attendee": {
             "name": prospect.contact_name,
             "email": prospect.email,
@@ -337,12 +344,16 @@ async def create_booking(
         "cal-api-version": "2024-08-13",
     }
 
+    logger.info("create_booking: url=%s payload=%s", url, payload)
+
     last_exc: Exception | None = None
 
     for attempt in range(2):  # attempt 0 = first try, attempt 1 = retry
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 response = await client.post(url, json=payload, headers=headers)
+                if not response.is_success:
+                    logger.error("Cal.com booking error %s: %s", response.status_code, response.text)
                 response.raise_for_status()
                 data = response.json()
 
