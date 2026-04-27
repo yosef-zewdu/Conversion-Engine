@@ -50,8 +50,9 @@ app.add_middleware(
 async def _startup() -> None:
     await init_db()
     logger.info("Conversion Engine database initialized.")
-    # Inbox poller disabled — Resend sending key cannot read inbox.
-    # Replies are handled via /webhooks/email-inbound (Resend inbound routing webhook).
+    import asyncio
+    from webhooks.inbox_poller import start_inbox_poller
+    asyncio.create_task(start_inbox_poller())
 
 @app.get("/health")
 async def health(auth: None = Depends(verify_api_key)) -> dict[str, str]:
