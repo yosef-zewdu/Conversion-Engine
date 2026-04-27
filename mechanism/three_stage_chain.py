@@ -230,9 +230,9 @@ class CloserAgent:
     (keeps tests and CI fast without burning API credits).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, model: Optional[str] = None) -> None:
         self._api_key = os.environ.get("OPENROUTER_API_KEY", "")
-        self._model = os.environ.get("OPENROUTER_MODEL", "qwen/qwen3-235b-a22b")
+        self._model = model or os.environ.get("OPENROUTER_MODEL", "qwen/qwen3-235b-a22b")
 
     def run(
         self,
@@ -437,6 +437,7 @@ def compose_outbound_chain(
     gap_brief: Optional[CompetitorGapBrief],
     channel: str,
     max_retries: int = 2,
+    model: Optional[str] = None,
 ) -> OutboundMessage:
     """
     3-stage entry point replacing compose_outbound() in state_machine.py.
@@ -462,7 +463,7 @@ def compose_outbound_chain(
     summary = researcher.run(brief, gap_brief)
 
     # ── Stage 2 + 3 loop ──────────────────────────────────────────
-    closer = CloserAgent()
+    closer = CloserAgent(model=model)
     tone_guard = ToneGuard()
 
     draft_content = ""
