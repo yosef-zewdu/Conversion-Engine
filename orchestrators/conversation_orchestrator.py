@@ -298,7 +298,8 @@ class ConversationOrchestrator:
             prospect_dict = state.get("prospect") or {}
 
             if not brief_dict:
-                return {"content": "", "subject": None, "claims": []}
+                logger.warning("_compose_via_mechanism: no hiring_signal_brief — using LLM fallback")
+                return {"content": None, "subject": None, "claims": []}
 
             brief = HiringSignalBrief(**brief_dict)
             gap_brief = CompetitorGapBrief(**gap_dict) if gap_dict else None
@@ -325,8 +326,8 @@ class ConversationOrchestrator:
             }
 
         except Exception as exc:
-            logger.warning("Mechanism chain failed, returning empty draft: %s", exc)
-            return {"content": "", "subject": None, "claims": []}
+            logger.warning("Mechanism chain failed, returning None draft: %s", exc)
+            return {"content": None, "subject": None, "claims": []}
 
     async def _execute_send(
         self,
@@ -340,7 +341,9 @@ class ConversationOrchestrator:
 
         destination = get_outbound_destination()
         channel = action.get("channel", "email")
-        body = action.get("body", "")
+        body = (action.get("body") or "").strip()
+        if not body:
+            body = "Thank you for your interest. A member of the Tenacious team will be in touch shortly."
         prospect = state.get("prospect") or {}
 
         # Kill switch routing
@@ -363,11 +366,15 @@ class ConversationOrchestrator:
                 import os
 
                 resend.api_key = os.environ.get("RESEND_API_KEY", "")
+                resend_from = os.environ.get("RESEND_FROM", "onboarding@resend.dev")
+                prospect_id = prospect.get("prospect_id", "")
                 resend.Emails.send({
-                    "from": os.environ.get("RESEND_FROM", "onboarding@resend.dev"),
+                    "from": resend_from,
+                    "reply_to": [resend_from],
                     "to": [to],
-                    "subject": action.get("subject") or "Re: Your inquiry — Tenacious Consulting",
+                    "subject": f"[Lead: {prospect_id}] {action.get('subject') or 'Re: Your inquiry — Tenacious Consulting'}",
                     "text": body,
+                    "tags": [{"name": "prospect_id", "value": prospect_id}],
                     "headers": {"X-Tenacious-Status": "draft"},
                 })
                 tool_result["status"] = "success"
